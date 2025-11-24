@@ -6,36 +6,11 @@ import type {
   FSBridgeDirectory,
   FSBridgeDirectoryOptions,
   StoredHandle,
+  FSBridgeResult,
 } from '../types'
+import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
-}
-
-function getMimeType(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase()
-  const mimeTypes: Record<string, string> = {
-    txt: 'text/plain',
-    json: 'application/json',
-    js: 'text/javascript',
-    ts: 'text/typescript',
-    html: 'text/html',
-    css: 'text/css',
-    md: 'text/markdown',
-    xml: 'application/xml',
-    csv: 'text/csv',
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    svg: 'image/svg+xml',
-    webp: 'image/webp',
-    pdf: 'application/pdf',
-    zip: 'application/zip',
-  }
-  return mimeTypes[ext ?? ''] ?? 'application/octet-stream'
-}
+import { generateId, getMimeType } from '../utils'
 
 function buildAcceptTypes(accept?: string[]): FilePickerAcceptType[] {
   if (!accept || accept.length === 0) return []
@@ -67,7 +42,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     return 'showOpenFilePicker' in window
   }
 
-  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeFile | FSBridgeFile[] | null> {
+  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -98,10 +73,16 @@ export class FSAccessAdapter implements FSBridgeAdapter {
         })
       }
 
-      return options.multiple ? files : files[0] ?? null
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return null
-      throw err
+      return ok(options.multiple ? files : files[0])
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'AbortError') {
+        return err('cancelled', 'User cancelled file picker')
+      }
+      if (error.name === 'SecurityError') {
+        return err('permission_denied', 'Permission denied to access file', e)
+      }
+      return err('io_error', error.message || 'Failed to open file', e)
     }
   }
 
@@ -109,14 +90,18 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     file: FSBridgeFile,
     content: Uint8Array | string,
     _options?: FSBridgeSaveOptions
-  ): Promise<boolean> {
-    if (!file.handle) return false
+  ): Promise<FSBridgeResult<boolean>> {
+    if (!file.handle) {
+      return err('not_supported', 'Cannot save file without handle - use saveFileAs instead')
+    }
 
     try {
       const permission = await file.handle.queryPermission({ mode: 'readwrite' })
       if (permission !== 'granted') {
         const requested = await file.handle.requestPermission({ mode: 'readwrite' })
-        if (requested !== 'granted') return false
+        if (requested !== 'granted') {
+          return err('permission_denied', 'Write permission denied')
+        }
       }
 
       const writable = await file.handle.createWritable()
@@ -124,14 +109,20 @@ export class FSAccessAdapter implements FSBridgeAdapter {
       await writable.write(data)
       await writable.close()
 
-      return true
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return false
-      throw err
+      return ok(true)
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'AbortError') {
+        return err('cancelled', 'User cancelled save operation')
+      }
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to save file', e)
+      }
+      return err('io_error', error.message || 'Failed to save file', e)
     }
   }
 
-  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeFile | null> {
+  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeResult<FSBridgeFile>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -153,21 +144,27 @@ export class FSAccessAdapter implements FSBridgeAdapter {
 
       const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
 
-      return {
+      return ok({
         id,
         name: handle.name,
         content: contentArray,
         mimeType: getMimeType(handle.name),
         lastModified: Date.now(),
         handle,
+      })
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'AbortError') {
+        return err('cancelled', 'User cancelled save dialog')
       }
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return null
-      throw err
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to save file', e)
+      }
+      return err('io_error', error.message || 'Failed to save file', e)
     }
   }
 
-  async openDirectory(options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeDirectory | null> {
+  async openDirectory(options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeResult<FSBridgeDirectory>> {
     try {
       const handle = await window.showDirectoryPicker({
         startIn: options.startIn,
@@ -177,67 +174,98 @@ export class FSAccessAdapter implements FSBridgeAdapter {
       const id = generateId()
       await this.storage.storeHandle(handle, id)
 
-      return {
+      return ok({
         id,
         name: handle.name,
         handle,
+      })
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'AbortError') {
+        return err('cancelled', 'User cancelled directory picker')
       }
-    } catch (err) {
-      if ((err as Error).name === 'AbortError') return null
-      throw err
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to access directory', e)
+      }
+      return err('io_error', error.message || 'Failed to open directory', e)
     }
   }
 
-  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeFile[]> {
-    if (!directory.handle) return []
-
-    const files: FSBridgeFile[] = []
-
-    for await (const entry of directory.handle.values()) {
-      if (entry.kind === 'file') {
-        const file = await entry.getFile()
-        const content = new Uint8Array(await file.arrayBuffer())
-
-        files.push({
-          id: generateId(),
-          name: entry.name,
-          content,
-          mimeType: file.type || getMimeType(entry.name),
-          lastModified: file.lastModified,
-          handle: entry,
-        })
-      }
+  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeFile[]>> {
+    if (!directory.handle) {
+      return err('not_supported', 'Cannot read directory without handle')
     }
 
-    return files
+    try {
+      const files: FSBridgeFile[] = []
+
+      for await (const entry of directory.handle.values()) {
+        if (entry.kind === 'file') {
+          const file = await entry.getFile()
+          const content = new Uint8Array(await file.arrayBuffer())
+
+          files.push({
+            id: generateId(),
+            name: entry.name,
+            content,
+            mimeType: file.type || getMimeType(entry.name),
+            lastModified: file.lastModified,
+            handle: entry,
+          })
+        }
+      }
+
+      return ok(files)
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to read directory', e)
+      }
+      return err('io_error', error.message || 'Failed to read directory', e)
+    }
   }
 
   async getRecentFiles(): Promise<StoredHandle[]> {
     return this.storage.getStoredHandles()
   }
 
-  async restoreFile(stored: StoredHandle): Promise<FSBridgeFile | null> {
+  async restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>> {
     const handle = await this.storage.getHandleObject(stored.id)
-    if (!handle || handle.kind !== 'file') return null
+    if (!handle || handle.kind !== 'file') {
+      return err('not_found', 'File handle not found in storage')
+    }
 
     const fileHandle = handle as FileSystemFileHandle
 
-    const permission = await fileHandle.queryPermission({ mode: 'read' })
-    if (permission !== 'granted') {
-      const requested = await fileHandle.requestPermission({ mode: 'read' })
-      if (requested !== 'granted') return null
-    }
+    try {
+      const permission = await fileHandle.queryPermission({ mode: 'read' })
+      if (permission !== 'granted') {
+        const requested = await fileHandle.requestPermission({ mode: 'read' })
+        if (requested !== 'granted') {
+          return err('permission_denied', 'Read permission denied')
+        }
+      }
 
-    const file = await fileHandle.getFile()
-    const content = new Uint8Array(await file.arrayBuffer())
+      const file = await fileHandle.getFile()
+      const content = new Uint8Array(await file.arrayBuffer())
 
-    return {
-      id: stored.id,
-      name: fileHandle.name,
-      content,
-      mimeType: file.type || getMimeType(fileHandle.name),
-      lastModified: file.lastModified,
-      handle: fileHandle,
+      return ok({
+        id: stored.id,
+        name: fileHandle.name,
+        content,
+        mimeType: file.type || getMimeType(fileHandle.name),
+        lastModified: file.lastModified,
+        handle: fileHandle,
+      })
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'NotFoundError') {
+        return err('not_found', 'File no longer exists at original location', e)
+      }
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to restore file', e)
+      }
+      return err('io_error', error.message || 'Failed to restore file', e)
     }
   }
 

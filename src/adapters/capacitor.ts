@@ -6,40 +6,11 @@ import type {
   FSBridgeDirectory,
   FSBridgeDirectoryOptions,
   StoredHandle,
+  FSBridgeResult,
 } from '../types'
+import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
-}
-
-function getMimeType(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase()
-  const mimeTypes: Record<string, string> = {
-    txt: 'text/plain',
-    json: 'application/json',
-    js: 'text/javascript',
-    ts: 'text/typescript',
-    html: 'text/html',
-    css: 'text/css',
-    md: 'text/markdown',
-    xml: 'application/xml',
-    csv: 'text/csv',
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    svg: 'image/svg+xml',
-    webp: 'image/webp',
-    pdf: 'application/pdf',
-    zip: 'application/zip',
-  }
-  return mimeTypes[ext ?? ''] ?? 'application/octet-stream'
-}
-
-function getFileName(path: string): string {
-  return path.split('/').pop() ?? path.split('\\').pop() ?? path
-}
+import { generateId, getMimeType } from '../utils'
 
 type CapacitorFilesystem = typeof import('@capacitor/filesystem')
 
@@ -63,9 +34,7 @@ export class CapacitorAdapter implements FSBridgeAdapter {
     return this.filesystem
   }
 
-  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeFile | FSBridgeFile[] | null> {
-    const { Filesystem, Directory, Encoding } = await this.loadModule()
-
+  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
     const accept = options.accept?.join(',') ?? '*/*'
     const input = document.createElement('input')
     input.type = 'file'
@@ -76,48 +45,45 @@ export class CapacitorAdapter implements FSBridgeAdapter {
       input.onchange = async () => {
         const fileList = input.files
         if (!fileList || fileList.length === 0) {
-          resolve(null)
+          resolve(err('cancelled', 'No files selected'))
           return
         }
 
-        const files: FSBridgeFile[] = []
+        try {
+          const files: FSBridgeFile[] = []
 
-        for (let i = 0; i < fileList.length; i++) {
-          const file = fileList[i]
-          const content = new Uint8Array(await file.arrayBuffer())
-          const id = generateId()
-          const fileName = `fsbridge_${id}_${file.name}`
+          for (let i = 0; i < fileList.length; i++) {
+            const file = fileList[i]
+            const content = new Uint8Array(await file.arrayBuffer())
+            const id = generateId()
 
-          await Filesystem.writeFile({
-            path: fileName,
-            data: btoa(String.fromCharCode(...content)),
-            directory: Directory.Data,
-            encoding: Encoding.UTF8,
-          })
+            await this.storage.storeFile({
+              id,
+              name: file.name,
+              content,
+              mimeType: file.type || getMimeType(file.name),
+              lastModified: file.lastModified,
+              storedAt: Date.now(),
+            })
 
-          await this.storage.storeFile({
-            id,
-            name: file.name,
-            content,
-            mimeType: file.type || getMimeType(file.name),
-            lastModified: file.lastModified,
-            storedAt: Date.now(),
-          })
+            files.push({
+              id,
+              name: file.name,
+              path: `fsbridge_${id}_${file.name}`,
+              content,
+              mimeType: file.type || getMimeType(file.name),
+              lastModified: file.lastModified,
+            })
+          }
 
-          files.push({
-            id,
-            name: file.name,
-            path: fileName,
-            content,
-            mimeType: file.type || getMimeType(file.name),
-            lastModified: file.lastModified,
-          })
+          resolve(ok(options.multiple ? files : files[0]))
+        } catch (e) {
+          const error = e as Error
+          resolve(err('io_error', error.message || 'Failed to read file', e))
         }
-
-        resolve(options.multiple ? files : files[0] ?? null)
       }
 
-      input.oncancel = () => resolve(null)
+      input.oncancel = () => resolve(err('cancelled', 'User cancelled file picker'))
       input.click()
     })
   }
@@ -126,123 +92,148 @@ export class CapacitorAdapter implements FSBridgeAdapter {
     file: FSBridgeFile,
     content: Uint8Array | string,
     _options?: FSBridgeSaveOptions
-  ): Promise<boolean> {
-    const { Filesystem, Directory, Encoding } = await this.loadModule()
+  ): Promise<FSBridgeResult<boolean>> {
+    try {
+      const { Filesystem, Directory } = await this.loadModule()
 
-    const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
-    const fileName = file.path ?? `fsbridge_${file.id}_${file.name}`
+      const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
+      const fileName = file.path ?? `fsbridge_${file.id}_${file.name}`
 
-    await Filesystem.writeFile({
-      path: fileName,
-      data: btoa(String.fromCharCode(...contentArray)),
-      directory: Directory.Data,
-      encoding: Encoding.UTF8,
-    })
+      await Filesystem.writeFile({
+        path: fileName,
+        data: new Blob([contentArray.buffer as ArrayBuffer]),
+        directory: Directory.Data,
+      })
 
-    await this.storage.storeFile({
-      id: file.id,
-      name: file.name,
-      content: contentArray,
-      mimeType: file.mimeType,
-      lastModified: Date.now(),
-      storedAt: Date.now(),
-    })
+      await this.storage.storeFile({
+        id: file.id,
+        name: file.name,
+        content: contentArray,
+        mimeType: file.mimeType,
+        lastModified: Date.now(),
+        storedAt: Date.now(),
+      })
 
-    return true
-  }
-
-  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeFile | null> {
-    const { Filesystem, Directory, Encoding } = await this.loadModule()
-
-    const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
-    const name = options.suggestedName ?? 'untitled'
-    const id = generateId()
-    const fileName = `fsbridge_${id}_${name}`
-
-    await Filesystem.writeFile({
-      path: fileName,
-      data: btoa(String.fromCharCode(...contentArray)),
-      directory: Directory.Data,
-      encoding: Encoding.UTF8,
-    })
-
-    await this.storage.storeFile({
-      id,
-      name,
-      content: contentArray,
-      mimeType: getMimeType(name),
-      lastModified: Date.now(),
-      storedAt: Date.now(),
-    })
-
-    return {
-      id,
-      name,
-      path: fileName,
-      content: contentArray,
-      mimeType: getMimeType(name),
-      lastModified: Date.now(),
+      return ok(true)
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to save file', e)
     }
   }
 
-  async openDirectory(_options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeDirectory | null> {
-    const { Filesystem, Directory } = await this.loadModule()
-
+  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeResult<FSBridgeFile>> {
     try {
+      const { Filesystem, Directory } = await this.loadModule()
+
+      const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
+      const name = options.suggestedName ?? 'untitled'
+      const id = generateId()
+      const fileName = `fsbridge_${id}_${name}`
+
+      await Filesystem.writeFile({
+        path: fileName,
+        data: new Blob([contentArray.buffer as ArrayBuffer]),
+        directory: Directory.Data,
+      })
+
+      await this.storage.storeFile({
+        id,
+        name,
+        content: contentArray,
+        mimeType: getMimeType(name),
+        lastModified: Date.now(),
+        storedAt: Date.now(),
+      })
+
+      return ok({
+        id,
+        name,
+        path: fileName,
+        content: contentArray,
+        mimeType: getMimeType(name),
+        lastModified: Date.now(),
+      })
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to save file', e)
+    }
+  }
+
+  async openDirectory(_options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeResult<FSBridgeDirectory>> {
+    try {
+      const { Filesystem, Directory } = await this.loadModule()
+
       const result = await Filesystem.readdir({
         path: '',
         directory: Directory.Documents,
       })
 
-      if (!result) return null
+      if (!result) {
+        return err('io_error', 'Failed to read directory')
+      }
 
       const id = generateId()
-      return {
+      return ok({
         id,
         name: 'Documents',
         path: '',
-      }
-    } catch {
-      return null
+      })
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to open directory', e)
     }
   }
 
-  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeFile[]> {
-    const { Filesystem, Directory, Encoding } = await this.loadModule()
+  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeFile[]>> {
+    try {
+      const { Filesystem, Directory } = await this.loadModule()
 
-    const result = await Filesystem.readdir({
-      path: directory.path ?? '',
-      directory: Directory.Documents,
-    })
+      const result = await Filesystem.readdir({
+        path: directory.path ?? '',
+        directory: Directory.Documents,
+      })
 
-    const files: FSBridgeFile[] = []
+      const files: FSBridgeFile[] = []
 
-    for (const entry of result.files) {
-      if (entry.type === 'directory') continue
+      for (const entry of result.files) {
+        if (entry.type === 'directory') continue
 
-      try {
-        const fileData = await Filesystem.readFile({
-          path: `${directory.path}/${entry.name}`,
-          directory: Directory.Documents,
-          encoding: Encoding.UTF8,
-        })
+        try {
+          const filePath = directory.path ? `${directory.path}/${entry.name}` : entry.name
+          const fileData = await Filesystem.readFile({
+            path: filePath,
+            directory: Directory.Documents,
+          })
 
-        const content = Uint8Array.from(atob(fileData.data as string), (c) => c.charCodeAt(0))
+          let content: Uint8Array
+          if (fileData.data instanceof Blob) {
+            content = new Uint8Array(await fileData.data.arrayBuffer())
+          } else {
+            const binary = atob(fileData.data as string)
+            content = new Uint8Array(binary.length)
+            for (let i = 0; i < binary.length; i++) {
+              content[i] = binary.charCodeAt(i)
+            }
+          }
 
-        files.push({
-          id: generateId(),
-          name: entry.name,
-          path: `${directory.path}/${entry.name}`,
-          content,
-          mimeType: getMimeType(entry.name),
-          lastModified: entry.mtime ?? Date.now(),
-        })
-      } catch {
-        continue
+          files.push({
+            id: generateId(),
+            name: entry.name,
+            path: filePath,
+            content,
+            mimeType: getMimeType(entry.name),
+            lastModified: entry.mtime ?? Date.now(),
+          })
+        } catch {
+          continue
+        }
       }
-    }
 
-    return files
+      return ok(files)
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to read directory', e)
+    }
   }
 
   async getRecentFiles(): Promise<StoredHandle[]> {
@@ -255,17 +246,19 @@ export class CapacitorAdapter implements FSBridgeAdapter {
     }))
   }
 
-  async restoreFile(stored: StoredHandle): Promise<FSBridgeFile | null> {
+  async restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>> {
     const file = await this.storage.getStoredFile(stored.id)
-    if (!file) return null
+    if (!file) {
+      return err('not_found', 'File not found in storage')
+    }
 
-    return {
+    return ok({
       id: file.id,
       name: file.name,
       content: file.content,
       mimeType: file.mimeType,
       lastModified: file.lastModified,
-    }
+    })
   }
 
   async removeFromRecent(id: string): Promise<void> {

@@ -9,6 +9,7 @@ Cross-platform file system abstraction for web, Tauri, and Capacitor.
 - **Tauri integration** via @tauri-apps/plugin-dialog and @tauri-apps/plugin-fs
 - **Capacitor integration** via @capacitor/filesystem
 - **Automatic platform detection** with configurable overrides
+- **Type-safe error handling** with discriminated result types
 - **Optional persistence** - skip IndexedDB storage when not needed
 
 ## Installation
@@ -25,26 +26,91 @@ import { createFSBridge } from 'fsbridge'
 const fs = createFSBridge({ appName: 'myapp' })
 
 // Open a file
-const file = await fs.openFile({ accept: ['.json', '.txt'] })
-if (file) {
-  const text = fs.readAsText(file)
+const result = await fs.openFile({ accept: ['.json', '.txt'] })
+if (result.ok) {
+  const text = fs.readAsText(result.data)
   console.log(text)
+} else {
+  // Handle error with full context
+  if (result.error.code === 'cancelled') {
+    console.log('User cancelled')
+  } else {
+    console.error(result.error.message)
+  }
 }
 
 // Save to the same file (if handle available)
-await fs.saveFile(file, 'updated content')
+const saveResult = await fs.saveFile(file, 'updated content')
+if (!saveResult.ok && saveResult.error.code === 'permission_denied') {
+  console.log('Need write permission')
+}
 
 // Save as new file
-const newFile = await fs.saveFileAs('content', {
+const newFileResult = await fs.saveFileAs('content', {
   suggestedName: 'document.txt'
 })
 
 // Open multiple files
-const files = await fs.openFiles({ accept: ['.png', '.jpg'] })
+const filesResult = await fs.openFiles({ accept: ['.png', '.jpg'] })
+if (filesResult.ok) {
+  for (const file of filesResult.data) {
+    console.log(file.name)
+  }
+}
 
 // Get recent files
 const recent = await fs.getRecentFiles()
 const restored = await fs.restoreFile(recent[0])
+```
+
+## Error Handling
+
+All async operations return `FSBridgeResult<T>`:
+
+```typescript
+type FSBridgeResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; error: FSBridgeError }
+
+interface FSBridgeError {
+  code: FSBridgeErrorCode
+  message: string
+  cause?: unknown  // Original error if available
+}
+
+type FSBridgeErrorCode =
+  | 'cancelled'           // User cancelled operation
+  | 'permission_denied'   // No permission to access file/directory
+  | 'not_supported'       // Operation not supported on this platform
+  | 'not_found'           // File/handle not found
+  | 'io_error'            // Generic I/O error
+  | 'unknown'             // Unknown error
+```
+
+Example error handling:
+
+```typescript
+const result = await fs.openFile()
+
+if (!result.ok) {
+  switch (result.error.code) {
+    case 'cancelled':
+      // User clicked cancel - this is normal, not an error
+      break
+    case 'permission_denied':
+      showPermissionDialog()
+      break
+    case 'not_supported':
+      showFallbackUI()
+      break
+    default:
+      console.error('File operation failed:', result.error.message)
+  }
+  return
+}
+
+// result.data is the file
+const file = result.data
 ```
 
 ## Configuration
@@ -75,6 +141,9 @@ await fs.saveFileAs(content, { persist: false })
 console.log(fs.platform)
 // 'web-fs-access' | 'web-fallback' | 'tauri' | 'capacitor'
 
+console.log(fs.capabilities)
+// { openFile: true, saveFile: true, openDirectory: true, ... }
+
 console.log(fs.supportsDirectories)
 // true if openDirectory() is available
 
@@ -92,11 +161,66 @@ fs.readAsBlob(file)       // Blob
 fs.readAsObjectURL(file)  // blob:...
 ```
 
-## Adapters
+## Platform Capabilities
 
-| Adapter | Platform | Directories | Handle Persistence |
-|---------|----------|-------------|-------------------|
-| FSAccessAdapter | Modern browsers | Yes | Yes |
-| PickerIDBAdapter | All browsers | No | No (content only) |
-| TauriAdapter | Tauri apps | Yes | No |
-| CapacitorAdapter | Capacitor apps | Limited | No |
+| Capability | web-fs-access | web-fallback | tauri | capacitor |
+|------------|---------------|--------------|-------|-----------|
+| openFile | Yes | Yes | Yes | Yes |
+| saveFile | Yes | Yes | Yes | Yes |
+| saveFileAs | Yes | Yes | Yes | Yes |
+| openDirectory | Yes | No | Yes | Limited |
+| readDirectory | Yes | No | Yes | Limited |
+| handlePersistence | Yes | No | No | No |
+
+### Platform Details
+
+**web-fs-access** (Modern browsers with File System Access API)
+- Full read/write access to files
+- Handle persistence allows reopening files across sessions without picker
+- Best experience for desktop web apps
+
+**web-fallback** (All browsers)
+- Uses `<input type="file">` for opening
+- Downloads files to save (no in-place editing)
+- Content stored in IndexedDB for recent files
+- No directory support
+
+**tauri** (Tauri desktop apps)
+- Native file dialogs
+- Full filesystem access via Tauri plugins
+- Path-based operations (no handle persistence)
+
+**capacitor** (Capacitor mobile apps)
+- Uses native file picker for opening
+- Limited to Documents directory for directory operations
+- Content stored in app's data directory
+
+## Exports
+
+```typescript
+// Main factory
+import { createFSBridge, FSBridge } from 'fsbridge'
+
+// Types
+import type {
+  FSBridgeFile,
+  FSBridgeDirectory,
+  FSBridgeResult,
+  FSBridgeError,
+  FSBridgeErrorCode,
+  FSBridgeCapabilities,
+  Platform,
+  StoredHandle,
+} from 'fsbridge'
+
+// Helpers
+import { ok, err, PLATFORM_CAPABILITIES } from 'fsbridge'
+
+// Individual adapters (for advanced use)
+import {
+  FSAccessAdapter,
+  PickerIDBAdapter,
+  TauriAdapter,
+  CapacitorAdapter,
+} from 'fsbridge'
+```

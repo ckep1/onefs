@@ -8,7 +8,12 @@ import type {
   FSBridgeDirectoryOptions,
   StoredHandle,
   Platform,
+  FSBridgeResult,
+  FSBridgeErrorCode,
+  FSBridgeError,
+  FSBridgeCapabilities,
 } from './types'
+import { ok, err, PLATFORM_CAPABILITIES } from './types'
 
 import { FSAccessAdapter } from './adapters/fs-access'
 import { PickerIDBAdapter } from './adapters/picker-idb'
@@ -25,8 +30,13 @@ export type {
   FSBridgeDirectoryOptions,
   StoredHandle,
   Platform,
+  FSBridgeResult,
+  FSBridgeErrorCode,
+  FSBridgeError,
+  FSBridgeCapabilities,
 }
 
+export { ok, err, PLATFORM_CAPABILITIES }
 export { FSAccessAdapter, PickerIDBAdapter, TauriAdapter, CapacitorAdapter }
 
 export class FSBridge {
@@ -75,6 +85,10 @@ export class FSBridge {
     return this.adapter.platform
   }
 
+  get capabilities(): FSBridgeCapabilities {
+    return PLATFORM_CAPABILITIES[this.adapter.platform]
+  }
+
   get supportsDirectories(): boolean {
     return typeof this.adapter.openDirectory === 'function'
   }
@@ -83,38 +97,37 @@ export class FSBridge {
     return this.adapter.platform === 'web-fs-access'
   }
 
-  async openFile(options?: FSBridgeOpenOptions): Promise<FSBridgeFile | null>
-  async openFile(options: FSBridgeOpenOptions & { multiple: true }): Promise<FSBridgeFile[]>
-  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeFile | FSBridgeFile[] | null> {
+  async openFile(options?: FSBridgeOpenOptions): Promise<FSBridgeResult<FSBridgeFile>>
+  async openFile(options: FSBridgeOpenOptions & { multiple: true }): Promise<FSBridgeResult<FSBridgeFile[]>>
+  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
     return this.adapter.openFile(options)
   }
 
-  async openFiles(options: Omit<FSBridgeOpenOptions, 'multiple'> = {}): Promise<FSBridgeFile[]> {
+  async openFiles(options: Omit<FSBridgeOpenOptions, 'multiple'> = {}): Promise<FSBridgeResult<FSBridgeFile[]>> {
     const result = await this.adapter.openFile({ ...options, multiple: true })
-    if (!result) return []
-    return Array.isArray(result) ? result : [result]
+    if (!result.ok) return result
+    const data = Array.isArray(result.data) ? result.data : [result.data]
+    return ok(data)
   }
 
-  async saveFile(file: FSBridgeFile, content: Uint8Array | string, options?: FSBridgeSaveOptions): Promise<boolean> {
+  async saveFile(file: FSBridgeFile, content: Uint8Array | string, options?: FSBridgeSaveOptions): Promise<FSBridgeResult<boolean>> {
     return this.adapter.saveFile(file, content, options)
   }
 
-  async saveFileAs(content: Uint8Array | string, options?: FSBridgeSaveOptions): Promise<FSBridgeFile | null> {
+  async saveFileAs(content: Uint8Array | string, options?: FSBridgeSaveOptions): Promise<FSBridgeResult<FSBridgeFile>> {
     return this.adapter.saveFileAs(content, options)
   }
 
-  async openDirectory(options?: FSBridgeDirectoryOptions): Promise<FSBridgeDirectory | null> {
+  async openDirectory(options?: FSBridgeDirectoryOptions): Promise<FSBridgeResult<FSBridgeDirectory>> {
     if (!this.adapter.openDirectory) {
-      console.warn(`[fsbridge] Directory operations not supported on ${this.adapter.platform}`)
-      return null
+      return err('not_supported', `Directory operations not supported on ${this.adapter.platform}`)
     }
     return this.adapter.openDirectory(options)
   }
 
-  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeFile[]> {
+  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeFile[]>> {
     if (!this.adapter.readDirectory) {
-      console.warn(`[fsbridge] Directory operations not supported on ${this.adapter.platform}`)
-      return []
+      return err('not_supported', `Directory operations not supported on ${this.adapter.platform}`)
     }
     return this.adapter.readDirectory(directory)
   }
@@ -123,7 +136,7 @@ export class FSBridge {
     return this.adapter.getRecentFiles()
   }
 
-  async restoreFile(stored: StoredHandle): Promise<FSBridgeFile | null> {
+  async restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>> {
     return this.adapter.restoreFile(stored)
   }
 
@@ -146,8 +159,11 @@ export class FSBridge {
 
   readAsDataURL(file: FSBridgeFile): string {
     const content = typeof file.content === 'string' ? new TextEncoder().encode(file.content) : file.content
-    const base64 = btoa(String.fromCharCode(...content))
-    return `data:${file.mimeType};base64,${base64}`
+    let binary = ''
+    for (let i = 0; i < content.length; i++) {
+      binary += String.fromCharCode(content[i])
+    }
+    return `data:${file.mimeType};base64,${btoa(binary)}`
   }
 
   readAsBlob(file: FSBridgeFile): Blob {

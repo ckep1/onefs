@@ -5,36 +5,11 @@ import type {
   FSBridgeSaveOptions,
   StoredHandle,
   StoredFile,
+  FSBridgeResult,
 } from '../types'
+import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-
-function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
-}
-
-function getMimeType(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase()
-  const mimeTypes: Record<string, string> = {
-    txt: 'text/plain',
-    json: 'application/json',
-    js: 'text/javascript',
-    ts: 'text/typescript',
-    html: 'text/html',
-    css: 'text/css',
-    md: 'text/markdown',
-    xml: 'application/xml',
-    csv: 'text/csv',
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    svg: 'image/svg+xml',
-    webp: 'image/webp',
-    pdf: 'application/pdf',
-    zip: 'application/zip',
-  }
-  return mimeTypes[ext ?? ''] ?? 'application/octet-stream'
-}
+import { generateId, getMimeType } from '../utils'
 
 export class PickerIDBAdapter implements FSBridgeAdapter {
   platform = 'web-fallback' as const
@@ -50,7 +25,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
     return typeof document !== 'undefined' && 'createElement' in document
   }
 
-  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeFile | FSBridgeFile[] | null> {
+  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     return new Promise((resolve) => {
@@ -65,42 +40,47 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
       input.onchange = async () => {
         const fileList = input.files
         if (!fileList || fileList.length === 0) {
-          resolve(null)
+          resolve(err('cancelled', 'No files selected'))
           return
         }
 
-        const files: FSBridgeFile[] = []
+        try {
+          const files: FSBridgeFile[] = []
 
-        for (let i = 0; i < fileList.length; i++) {
-          const file = fileList[i]
-          const content = new Uint8Array(await file.arrayBuffer())
-          const id = generateId()
+          for (let i = 0; i < fileList.length; i++) {
+            const file = fileList[i]
+            const content = new Uint8Array(await file.arrayBuffer())
+            const id = generateId()
 
-          if (shouldPersist) {
-            const storedFile: StoredFile = {
+            if (shouldPersist) {
+              const storedFile: StoredFile = {
+                id,
+                name: file.name,
+                content,
+                mimeType: file.type || getMimeType(file.name),
+                lastModified: file.lastModified,
+                storedAt: Date.now(),
+              }
+              await this.storage.storeFile(storedFile)
+            }
+
+            files.push({
               id,
               name: file.name,
               content,
               mimeType: file.type || getMimeType(file.name),
               lastModified: file.lastModified,
-              storedAt: Date.now(),
-            }
-            await this.storage.storeFile(storedFile)
+            })
           }
 
-          files.push({
-            id,
-            name: file.name,
-            content,
-            mimeType: file.type || getMimeType(file.name),
-            lastModified: file.lastModified,
-          })
+          resolve(ok(options.multiple ? files : files[0]))
+        } catch (e) {
+          const error = e as Error
+          resolve(err('io_error', error.message || 'Failed to read file', e))
         }
-
-        resolve(options.multiple ? files : files[0] ?? null)
       }
 
-      input.oncancel = () => resolve(null)
+      input.oncancel = () => resolve(err('cancelled', 'User cancelled file picker'))
       input.click()
     })
   }
@@ -109,53 +89,63 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
     file: FSBridgeFile,
     content: Uint8Array | string,
     options?: FSBridgeSaveOptions
-  ): Promise<boolean> {
+  ): Promise<FSBridgeResult<boolean>> {
     const shouldPersist = options?.persist ?? this.persistByDefault
     const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
 
-    if (shouldPersist) {
-      const storedFile: StoredFile = {
-        id: file.id,
-        name: file.name,
-        content: contentArray,
-        mimeType: file.mimeType,
-        lastModified: Date.now(),
-        storedAt: Date.now(),
+    try {
+      if (shouldPersist) {
+        const storedFile: StoredFile = {
+          id: file.id,
+          name: file.name,
+          content: contentArray,
+          mimeType: file.mimeType,
+          lastModified: Date.now(),
+          storedAt: Date.now(),
+        }
+        await this.storage.storeFile(storedFile)
       }
-      await this.storage.storeFile(storedFile)
-    }
 
-    this.triggerDownload(file.name, contentArray, file.mimeType)
-    return true
+      this.triggerDownload(file.name, contentArray, file.mimeType)
+      return ok(true)
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to save file', e)
+    }
   }
 
-  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeFile | null> {
+  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeResult<FSBridgeFile>> {
     const shouldPersist = options.persist ?? this.persistByDefault
     const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
     const name = options.suggestedName ?? 'untitled'
     const mimeType = getMimeType(name)
     const id = generateId()
 
-    if (shouldPersist) {
-      const storedFile: StoredFile = {
+    try {
+      if (shouldPersist) {
+        const storedFile: StoredFile = {
+          id,
+          name,
+          content: contentArray,
+          mimeType,
+          lastModified: Date.now(),
+          storedAt: Date.now(),
+        }
+        await this.storage.storeFile(storedFile)
+      }
+
+      this.triggerDownload(name, contentArray, mimeType)
+
+      return ok({
         id,
         name,
         content: contentArray,
         mimeType,
         lastModified: Date.now(),
-        storedAt: Date.now(),
-      }
-      await this.storage.storeFile(storedFile)
-    }
-
-    this.triggerDownload(name, contentArray, mimeType)
-
-    return {
-      id,
-      name,
-      content: contentArray,
-      mimeType,
-      lastModified: Date.now(),
+      })
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to save file', e)
     }
   }
 
@@ -181,17 +171,19 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
     }))
   }
 
-  async restoreFile(stored: StoredHandle): Promise<FSBridgeFile | null> {
+  async restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>> {
     const file = await this.storage.getStoredFile(stored.id)
-    if (!file) return null
+    if (!file) {
+      return err('not_found', 'File not found in storage')
+    }
 
-    return {
+    return ok({
       id: file.id,
       name: file.name,
       content: file.content,
       mimeType: file.mimeType,
       lastModified: file.lastModified,
-    }
+    })
   }
 
   async removeFromRecent(id: string): Promise<void> {
