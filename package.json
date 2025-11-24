@@ -1,0 +1,64 @@
+{
+  "name": "fsbridge",
+  "version": "0.1.0",
+  "description": "Cross-platform file system abstraction for web, Tauri, and Capacitor",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "vite build && tsc --emitDeclarationOnly",
+    "dev": "vite build --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "prepublishOnly": "bun run build"
+  },
+  "devDependencies": {
+    "@capacitor/filesystem": "^6.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-fs": "^2.0.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3",
+    "vite-plugin-dts": "^4.3.0",
+    "vitest": "^2.1.8"
+  },
+  "peerDependencies": {
+    "@capacitor/filesystem": ">=6.0.0",
+    "@tauri-apps/plugin-dialog": ">=2.0.0",
+    "@tauri-apps/plugin-fs": ">=2.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@capacitor/filesystem": {
+      "optional": true
+    },
+    "@tauri-apps/plugin-dialog": {
+      "optional": true
+    },
+    "@tauri-apps/plugin-fs": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "filesystem",
+    "file-system-access",
+    "tauri",
+    "capacitor",
+    "indexeddb",
+    "cross-platform"
+  ],
+  "author": "Chris",
+  "private": true
+}
