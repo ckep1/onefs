@@ -5,22 +5,33 @@ import type {
   FSBridgeSaveOptions,
   FSBridgeDirectory,
   FSBridgeDirectoryOptions,
+  FSBridgeEntry,
   StoredHandle,
+  StoredFile,
   FSBridgeResult,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType } from '../utils'
+import { generateId, getMimeType, base64ToUint8Array } from '../utils'
 
 type CapacitorFilesystem = typeof import('@capacitor/filesystem')
 
+/**
+ * Adapter for Capacitor mobile applications.
+ * Limited directory support (Documents directory only).
+ *
+ * Note: saveFile() saves to the app's Data directory, not the original location.
+ * Check capabilities.canSaveInPlace to detect this behavior.
+ */
 export class CapacitorAdapter implements FSBridgeAdapter {
   platform = 'capacitor' as const
   private storage: IDBStorage
   private filesystem: CapacitorFilesystem | null = null
+  private persistByDefault: boolean
 
-  constructor(appName: string, maxRecentFiles = 10) {
+  constructor(appName: string, maxRecentFiles = 10, persistByDefault = true) {
     this.storage = new IDBStorage(appName, maxRecentFiles)
+    this.persistByDefault = persistByDefault
   }
 
   isSupported(): boolean {
@@ -35,6 +46,7 @@ export class CapacitorAdapter implements FSBridgeAdapter {
   }
 
   async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
+    const shouldPersist = options.persist ?? this.persistByDefault
     const accept = options.accept?.join(',') ?? '*/*'
     const input = document.createElement('input')
     input.type = 'file'
@@ -56,22 +68,29 @@ export class CapacitorAdapter implements FSBridgeAdapter {
             const file = fileList[i]
             const content = new Uint8Array(await file.arrayBuffer())
             const id = generateId()
+            const syntheticPath = `fsbridge_${id}_${file.name}`
 
-            await this.storage.storeFile({
-              id,
-              name: file.name,
-              content,
-              mimeType: file.type || getMimeType(file.name),
-              lastModified: file.lastModified,
-              storedAt: Date.now(),
-            })
+            if (shouldPersist) {
+              const storedFile: StoredFile = {
+                id,
+                name: file.name,
+                path: syntheticPath,
+                content,
+                mimeType: file.type || getMimeType(file.name),
+                size: content.byteLength,
+                lastModified: file.lastModified,
+                storedAt: Date.now(),
+              }
+              await this.storage.storeFile(storedFile)
+            }
 
             files.push({
               id,
               name: file.name,
-              path: `fsbridge_${id}_${file.name}`,
+              path: syntheticPath,
               content,
               mimeType: file.type || getMimeType(file.name),
+              size: content.byteLength,
               lastModified: file.lastModified,
             })
           }
@@ -88,11 +107,16 @@ export class CapacitorAdapter implements FSBridgeAdapter {
     })
   }
 
+  /**
+   * Save file to app's Data directory (not original location).
+   */
   async saveFile(
     file: FSBridgeFile,
     content: Uint8Array | string,
-    _options?: FSBridgeSaveOptions
+    options?: FSBridgeSaveOptions
   ): Promise<FSBridgeResult<boolean>> {
+    const shouldPersist = options?.persist ?? this.persistByDefault
+
     try {
       const { Filesystem, Directory } = await this.loadModule()
 
@@ -105,23 +129,33 @@ export class CapacitorAdapter implements FSBridgeAdapter {
         directory: Directory.Data,
       })
 
-      await this.storage.storeFile({
-        id: file.id,
-        name: file.name,
-        content: contentArray,
-        mimeType: file.mimeType,
-        lastModified: Date.now(),
-        storedAt: Date.now(),
-      })
+      if (shouldPersist) {
+        const storedFile: StoredFile = {
+          id: file.id,
+          name: file.name,
+          path: fileName,
+          content: contentArray,
+          mimeType: file.mimeType,
+          size: contentArray.byteLength,
+          lastModified: Date.now(),
+          storedAt: Date.now(),
+        }
+        await this.storage.storeFile(storedFile)
+      }
 
       return ok(true)
     } catch (e) {
       const error = e as Error
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to save file', e)
+      }
       return err('io_error', error.message || 'Failed to save file', e)
     }
   }
 
   async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeResult<FSBridgeFile>> {
+    const shouldPersist = options.persist ?? this.persistByDefault
+
     try {
       const { Filesystem, Directory } = await this.loadModule()
 
@@ -136,14 +170,19 @@ export class CapacitorAdapter implements FSBridgeAdapter {
         directory: Directory.Data,
       })
 
-      await this.storage.storeFile({
-        id,
-        name,
-        content: contentArray,
-        mimeType: getMimeType(name),
-        lastModified: Date.now(),
-        storedAt: Date.now(),
-      })
+      if (shouldPersist) {
+        const storedFile: StoredFile = {
+          id,
+          name,
+          path: fileName,
+          content: contentArray,
+          mimeType: getMimeType(name),
+          size: contentArray.byteLength,
+          lastModified: Date.now(),
+          storedAt: Date.now(),
+        }
+        await this.storage.storeFile(storedFile)
+      }
 
       return ok({
         id,
@@ -151,18 +190,28 @@ export class CapacitorAdapter implements FSBridgeAdapter {
         path: fileName,
         content: contentArray,
         mimeType: getMimeType(name),
+        size: contentArray.byteLength,
         lastModified: Date.now(),
       })
     } catch (e) {
       const error = e as Error
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to save file', e)
+      }
       return err('io_error', error.message || 'Failed to save file', e)
     }
   }
 
-  async openDirectory(_options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  /**
+   * Opens the Documents directory (limited - no picker).
+   */
+  async openDirectory(options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeResult<FSBridgeDirectory>> {
+    const shouldPersist = options.persist ?? this.persistByDefault
+
     try {
       const { Filesystem, Directory } = await this.loadModule()
 
+      // Verify we can access the directory
       const result = await Filesystem.readdir({
         path: '',
         directory: Directory.Documents,
@@ -173,6 +222,21 @@ export class CapacitorAdapter implements FSBridgeAdapter {
       }
 
       const id = generateId()
+
+      if (shouldPersist) {
+        const storedFile: StoredFile = {
+          id,
+          name: 'Documents',
+          path: '',
+          content: new Uint8Array(0),
+          mimeType: 'inode/directory',
+          size: 0,
+          lastModified: Date.now(),
+          storedAt: Date.now(),
+        }
+        await this.storage.storeFile(storedFile)
+      }
+
       return ok({
         id,
         name: 'Documents',
@@ -180,11 +244,18 @@ export class CapacitorAdapter implements FSBridgeAdapter {
       })
     } catch (e) {
       const error = e as Error
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to access directory', e)
+      }
       return err('io_error', error.message || 'Failed to open directory', e)
     }
   }
 
-  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeFile[]>> {
+  /**
+   * List directory contents as entries (metadata only).
+   * Limited to Documents directory.
+   */
+  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeEntry[]>> {
     try {
       const { Filesystem, Directory } = await this.loadModule()
 
@@ -193,46 +264,86 @@ export class CapacitorAdapter implements FSBridgeAdapter {
         directory: Directory.Documents,
       })
 
-      const files: FSBridgeFile[] = []
+      const entries: FSBridgeEntry[] = []
 
       for (const entry of result.files) {
-        if (entry.type === 'directory') continue
+        const filePath = directory.path ? `${directory.path}/${entry.name}` : entry.name
 
-        try {
-          const filePath = directory.path ? `${directory.path}/${entry.name}` : entry.name
-          const fileData = await Filesystem.readFile({
-            path: filePath,
-            directory: Directory.Documents,
-          })
-
-          let content: Uint8Array
-          if (fileData.data instanceof Blob) {
-            content = new Uint8Array(await fileData.data.arrayBuffer())
-          } else {
-            const binary = atob(fileData.data as string)
-            content = new Uint8Array(binary.length)
-            for (let i = 0; i < binary.length; i++) {
-              content[i] = binary.charCodeAt(i)
-            }
-          }
-
-          files.push({
-            id: generateId(),
+        if (entry.type === 'directory') {
+          entries.push({
             name: entry.name,
+            kind: 'directory',
             path: filePath,
-            content,
-            mimeType: getMimeType(entry.name),
-            lastModified: entry.mtime ?? Date.now(),
           })
-        } catch {
-          continue
+        } else {
+          entries.push({
+            name: entry.name,
+            kind: 'file',
+            size: entry.size,
+            lastModified: entry.mtime ?? Date.now(),
+            path: filePath,
+          })
         }
       }
 
-      return ok(files)
+      return ok(entries)
     } catch (e) {
       const error = e as Error
+      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+        return err('not_found', 'Directory not found', e)
+      }
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to read directory', e)
+      }
       return err('io_error', error.message || 'Failed to read directory', e)
+    }
+  }
+
+  /**
+   * Load a specific file from a directory.
+   */
+  async readFileFromDirectory(
+    _directory: FSBridgeDirectory,
+    entry: FSBridgeEntry
+  ): Promise<FSBridgeResult<FSBridgeFile>> {
+    if (!entry.path || entry.kind !== 'file') {
+      return err('not_supported', 'Cannot read file without path')
+    }
+
+    try {
+      const { Filesystem, Directory } = await this.loadModule()
+
+      const fileData = await Filesystem.readFile({
+        path: entry.path,
+        directory: Directory.Documents,
+      })
+
+      let content: Uint8Array
+      if (fileData.data instanceof Blob) {
+        content = new Uint8Array(await fileData.data.arrayBuffer())
+      } else {
+        // Base64 encoded string
+        content = base64ToUint8Array(fileData.data as string)
+      }
+
+      return ok({
+        id: generateId(),
+        name: entry.name,
+        path: entry.path,
+        content,
+        mimeType: getMimeType(entry.name),
+        size: content.byteLength,
+        lastModified: entry.lastModified ?? Date.now(),
+      })
+    } catch (e) {
+      const error = e as Error
+      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+        return err('not_found', 'File not found', e)
+      }
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to read file', e)
+      }
+      return err('io_error', error.message || 'Failed to read file', e)
     }
   }
 
@@ -241,7 +352,8 @@ export class CapacitorAdapter implements FSBridgeAdapter {
     return files.map((f) => ({
       id: f.id,
       name: f.name,
-      type: 'file' as const,
+      path: f.path,
+      type: f.mimeType === 'inode/directory' ? 'directory' as const : 'file' as const,
       storedAt: f.storedAt,
     }))
   }
@@ -255,8 +367,10 @@ export class CapacitorAdapter implements FSBridgeAdapter {
     return ok({
       id: file.id,
       name: file.name,
+      path: file.path,
       content: file.content,
       mimeType: file.mimeType,
+      size: file.size,
       lastModified: file.lastModified,
     })
   }

@@ -2,6 +2,10 @@ import type { StoredHandle, StoredFile } from '../types'
 
 const DB_VERSION = 1
 
+/**
+ * IndexedDB storage manager for file handles and content.
+ * Handles persistence of File System Access API handles and file content fallback.
+ */
 export class IDBStorage {
   private dbName: string
   private db: IDBDatabase | null = null
@@ -44,11 +48,20 @@ export class IDBStorage {
     })
   }
 
-  async storeHandle(handle: FileSystemFileHandle | FileSystemDirectoryHandle, id: string): Promise<StoredHandle> {
+  /**
+   * Store a File System Access API handle for later restoration.
+   * Also stores metadata for listing recent files.
+   */
+  async storeHandle(
+    handle: FileSystemFileHandle | FileSystemDirectoryHandle,
+    id: string,
+    path?: string
+  ): Promise<StoredHandle> {
     const db = await this.getDB()
     const storedHandle: StoredHandle = {
       id,
       name: handle.name,
+      path,
       type: handle.kind === 'file' ? 'file' : 'directory',
       storedAt: Date.now(),
     }
@@ -70,6 +83,9 @@ export class IDBStorage {
     })
   }
 
+  /**
+   * Get all stored handle metadata, sorted by most recent first.
+   */
   async getStoredHandles(): Promise<StoredHandle[]> {
     const db = await this.getDB()
 
@@ -87,6 +103,10 @@ export class IDBStorage {
     })
   }
 
+  /**
+   * Get the actual FileSystemHandle object by ID.
+   * Returns null if not found (e.g., on non-FSA platforms).
+   */
   async getHandleObject(id: string): Promise<FileSystemFileHandle | FileSystemDirectoryHandle | null> {
     const db = await this.getDB()
 
@@ -103,6 +123,9 @@ export class IDBStorage {
     })
   }
 
+  /**
+   * Remove a handle and its metadata from storage.
+   */
   async removeHandle(id: string): Promise<void> {
     const db = await this.getDB()
 
@@ -117,6 +140,9 @@ export class IDBStorage {
     })
   }
 
+  /**
+   * Clear all stored handles.
+   */
   async clearHandles(): Promise<void> {
     const db = await this.getDB()
 
@@ -131,6 +157,9 @@ export class IDBStorage {
     })
   }
 
+  /**
+   * Remove oldest handles if count exceeds maxRecentFiles.
+   */
   private async pruneOldHandles(): Promise<void> {
     const handles = await this.getStoredHandles()
     if (handles.length <= this.maxRecentFiles) return
@@ -141,6 +170,10 @@ export class IDBStorage {
     }
   }
 
+  /**
+   * Store file content in IndexedDB (for fallback/Tauri/Capacitor platforms).
+   * Automatically prunes old files to stay within maxRecentFiles limit.
+   */
   async storeFile(file: StoredFile): Promise<void> {
     const db = await this.getDB()
 
@@ -151,10 +184,16 @@ export class IDBStorage {
       const store = tx.objectStore('files')
       store.put(file)
 
-      tx.oncomplete = () => resolve()
+      tx.oncomplete = async () => {
+        await this.pruneOldFiles()
+        resolve()
+      }
     })
   }
 
+  /**
+   * Get a stored file by ID.
+   */
   async getStoredFile(id: string): Promise<StoredFile | null> {
     const db = await this.getDB()
 
@@ -168,6 +207,9 @@ export class IDBStorage {
     })
   }
 
+  /**
+   * Remove a file from storage.
+   */
   async removeFile(id: string): Promise<void> {
     const db = await this.getDB()
 
@@ -181,6 +223,9 @@ export class IDBStorage {
     })
   }
 
+  /**
+   * Get all stored files, sorted by most recent first.
+   */
   async getStoredFiles(): Promise<StoredFile[]> {
     const db = await this.getDB()
 
@@ -198,6 +243,9 @@ export class IDBStorage {
     })
   }
 
+  /**
+   * Clear all stored files.
+   */
   async clearFiles(): Promise<void> {
     const db = await this.getDB()
 
@@ -209,5 +257,18 @@ export class IDBStorage {
 
       tx.oncomplete = () => resolve()
     })
+  }
+
+  /**
+   * Remove oldest files if count exceeds maxRecentFiles.
+   */
+  private async pruneOldFiles(): Promise<void> {
+    const files = await this.getStoredFiles()
+    if (files.length <= this.maxRecentFiles) return
+
+    const toRemove = files.slice(this.maxRecentFiles)
+    for (const file of toRemove) {
+      await this.removeFile(file.id)
+    }
   }
 }

@@ -5,6 +5,7 @@ import type {
   FSBridgeSaveOptions,
   FSBridgeDirectory,
   FSBridgeDirectoryOptions,
+  FSBridgeEntry,
   StoredHandle,
   FSBridgeResult,
 } from '../types'
@@ -28,6 +29,10 @@ function buildAcceptTypes(accept?: string[]): FilePickerAcceptType[] {
   ]
 }
 
+/**
+ * Adapter for the File System Access API (modern browsers).
+ * Provides full read/write access with handle persistence.
+ */
 export class FSAccessAdapter implements FSBridgeAdapter {
   platform = 'web-fs-access' as const
   private storage: IDBStorage
@@ -68,6 +73,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
           name: handle.name,
           content,
           mimeType: file.type || getMimeType(handle.name),
+          size: content.byteLength,
           lastModified: file.lastModified,
           handle,
         })
@@ -149,6 +155,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
         name: handle.name,
         content: contentArray,
         mimeType: getMimeType(handle.name),
+        size: contentArray.byteLength,
         lastModified: Date.now(),
         handle,
       })
@@ -165,6 +172,8 @@ export class FSAccessAdapter implements FSBridgeAdapter {
   }
 
   async openDirectory(options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeResult<FSBridgeDirectory>> {
+    const shouldPersist = options.persist ?? this.persistByDefault
+
     try {
       const handle = await window.showDirectoryPicker({
         startIn: options.startIn,
@@ -172,7 +181,9 @@ export class FSAccessAdapter implements FSBridgeAdapter {
       })
 
       const id = generateId()
-      await this.storage.storeHandle(handle, id)
+      if (shouldPersist) {
+        await this.storage.storeHandle(handle, id)
+      }
 
       return ok({
         id,
@@ -191,37 +202,81 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
-  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeFile[]>> {
+  /**
+   * List directory contents as entries (metadata only, no content loaded).
+   * Use readFileFromDirectory() to load a specific file's content.
+   */
+  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeEntry[]>> {
     if (!directory.handle) {
       return err('not_supported', 'Cannot read directory without handle')
     }
 
     try {
-      const files: FSBridgeFile[] = []
+      const entries: FSBridgeEntry[] = []
 
       for await (const entry of directory.handle.values()) {
         if (entry.kind === 'file') {
           const file = await entry.getFile()
-          const content = new Uint8Array(await file.arrayBuffer())
-
-          files.push({
-            id: generateId(),
+          entries.push({
             name: entry.name,
-            content,
-            mimeType: file.type || getMimeType(entry.name),
+            kind: 'file',
+            size: file.size,
             lastModified: file.lastModified,
+            handle: entry,
+          })
+        } else {
+          entries.push({
+            name: entry.name,
+            kind: 'directory',
             handle: entry,
           })
         }
       }
 
-      return ok(files)
+      return ok(entries)
     } catch (e) {
       const error = e as Error
       if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
         return err('permission_denied', 'Permission denied to read directory', e)
       }
       return err('io_error', error.message || 'Failed to read directory', e)
+    }
+  }
+
+  /**
+   * Load a specific file from a directory.
+   */
+  async readFileFromDirectory(
+    _directory: FSBridgeDirectory,
+    entry: FSBridgeEntry
+  ): Promise<FSBridgeResult<FSBridgeFile>> {
+    if (!entry.handle || entry.kind !== 'file') {
+      return err('not_supported', 'Cannot read file without handle')
+    }
+
+    try {
+      const fileHandle = entry.handle as FileSystemFileHandle
+      const file = await fileHandle.getFile()
+      const content = new Uint8Array(await file.arrayBuffer())
+
+      return ok({
+        id: generateId(),
+        name: entry.name,
+        content,
+        mimeType: file.type || getMimeType(entry.name),
+        size: content.byteLength,
+        lastModified: file.lastModified,
+        handle: fileHandle,
+      })
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'NotFoundError') {
+        return err('not_found', 'File no longer exists', e)
+      }
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to read file', e)
+      }
+      return err('io_error', error.message || 'Failed to read file', e)
     }
   }
 
@@ -254,6 +309,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
         name: fileHandle.name,
         content,
         mimeType: file.type || getMimeType(fileHandle.name),
+        size: content.byteLength,
         lastModified: file.lastModified,
         handle: fileHandle,
       })

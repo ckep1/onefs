@@ -11,6 +11,13 @@ import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
 import { generateId, getMimeType } from '../utils'
 
+/**
+ * Fallback adapter for browsers without File System Access API.
+ * Uses <input type="file"> for selection and downloads for saving.
+ *
+ * Note: saveFile() triggers a download rather than saving in-place.
+ * Check capabilities.canSaveInPlace to detect this behavior.
+ */
 export class PickerIDBAdapter implements FSBridgeAdapter {
   platform = 'web-fallback' as const
   private storage: IDBStorage
@@ -58,6 +65,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
                 name: file.name,
                 content,
                 mimeType: file.type || getMimeType(file.name),
+                size: content.byteLength,
                 lastModified: file.lastModified,
                 storedAt: Date.now(),
               }
@@ -69,6 +77,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
               name: file.name,
               content,
               mimeType: file.type || getMimeType(file.name),
+              size: content.byteLength,
               lastModified: file.lastModified,
             })
           }
@@ -85,6 +94,10 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
     })
   }
 
+  /**
+   * "Save" by triggering a download. Does not save in-place.
+   * The file is also stored in IndexedDB for restoration via getRecentFiles().
+   */
   async saveFile(
     file: FSBridgeFile,
     content: Uint8Array | string,
@@ -100,6 +113,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
           name: file.name,
           content: contentArray,
           mimeType: file.mimeType,
+          size: contentArray.byteLength,
           lastModified: Date.now(),
           storedAt: Date.now(),
         }
@@ -114,6 +128,9 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
     }
   }
 
+  /**
+   * Save as a new file by triggering a download.
+   */
   async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeResult<FSBridgeFile>> {
     const shouldPersist = options.persist ?? this.persistByDefault
     const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
@@ -128,6 +145,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
           name,
           content: contentArray,
           mimeType,
+          size: contentArray.byteLength,
           lastModified: Date.now(),
           storedAt: Date.now(),
         }
@@ -141,6 +159,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
         name,
         content: contentArray,
         mimeType,
+        size: contentArray.byteLength,
         lastModified: Date.now(),
       })
     } catch (e) {
@@ -182,6 +201,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
       name: file.name,
       content: file.content,
       mimeType: file.mimeType,
+      size: file.size,
       lastModified: file.lastModified,
     })
   }
