@@ -397,6 +397,38 @@ export class TauriAdapter implements FSBridgeAdapter {
     })
   }
 
+  async restoreDirectory(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeDirectory>> {
+    const file = await this.storage.getStoredFile(stored.id)
+    if (!file || file.mimeType !== 'inode/directory') {
+      return err('not_found', 'Directory not found in storage')
+    }
+
+    if (!file.path) {
+      return err('not_found', 'Directory path not found')
+    }
+
+    // Verify the directory still exists
+    try {
+      const { fs } = await this.loadModules()
+      const stat = await fs.stat(file.path)
+      if (!stat.isDirectory) {
+        return err('not_found', 'Path is not a directory')
+      }
+
+      return ok({
+        id: file.id,
+        name: file.name,
+        path: file.path,
+      })
+    } catch (e) {
+      const error = e as Error
+      if (error.message?.includes('No such file') || error.message?.includes('not found')) {
+        return err('not_found', 'Directory no longer exists at original location', e)
+      }
+      return err('io_error', error.message || 'Failed to restore directory', e)
+    }
+  }
+
   async removeFromRecent(id: string): Promise<void> {
     await this.storage.removeFile(id)
   }

@@ -325,6 +325,40 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
+  async restoreDirectory(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeDirectory>> {
+    const handle = await this.storage.getHandleObject(stored.id)
+    if (!handle || handle.kind !== 'directory') {
+      return err('not_found', 'Directory handle not found in storage')
+    }
+
+    const dirHandle = handle as FileSystemDirectoryHandle
+
+    try {
+      const permission = await dirHandle.queryPermission({ mode: 'read' })
+      if (permission !== 'granted') {
+        const requested = await dirHandle.requestPermission({ mode: 'read' })
+        if (requested !== 'granted') {
+          return err('permission_denied', 'Read permission denied')
+        }
+      }
+
+      return ok({
+        id: stored.id,
+        name: dirHandle.name,
+        handle: dirHandle,
+      })
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'NotFoundError') {
+        return err('not_found', 'Directory no longer exists at original location', e)
+      }
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to restore directory', e)
+      }
+      return err('io_error', error.message || 'Failed to restore directory', e)
+    }
+  }
+
   async removeFromRecent(id: string): Promise<void> {
     await this.storage.removeHandle(id)
   }

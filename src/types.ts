@@ -245,6 +245,9 @@ export interface FSBridgeAdapter {
   /** Restore a previously opened file from storage */
   restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>>
 
+  /** Restore a previously opened directory from storage (optional - check capabilities) */
+  restoreDirectory?(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeDirectory>>
+
   /** Remove a file from recent list */
   removeFromRecent(id: string): Promise<void>
 

@@ -1,4 +1,4 @@
-# fsbridge
+# onefs
 
 Cross-platform file system abstraction for web, Tauri, and Capacitor.
 
@@ -16,15 +16,15 @@ Cross-platform file system abstraction for web, Tauri, and Capacitor.
 ## Installation
 
 ```bash
-npm install fsbridge
+npm install onefs
 # or
-bun add fsbridge
+bun add onefs
 ```
 
 ## Quick Start
 
 ```typescript
-import { createFSBridge } from 'fsbridge'
+import { createFSBridge } from 'onefs'
 
 const fs = createFSBridge({ appName: 'myapp' })
 
@@ -52,7 +52,7 @@ const newFile = await fs.saveFileAs('content', {
 
 ## Important: Platform Differences
 
-FSBridge abstracts platform differences, but some behaviors vary. Always check capabilities before assuming behavior.
+OneFS abstracts platform differences, but some behaviors vary. Always check capabilities before assuming behavior.
 
 ### Content is Always `Uint8Array`
 
@@ -104,7 +104,7 @@ The `file.path` property has different meanings:
 | web-fs-access | `undefined` (no path access in browser) |
 | web-fallback | `undefined` |
 | tauri | Real filesystem path (e.g., `/home/user/doc.txt`) |
-| capacitor | Synthetic identifier (e.g., `fsbridge_123_doc.txt`) |
+| capacitor | Synthetic identifier (e.g., `onefs_123_doc.txt`) |
 
 ### Directory Support
 
@@ -318,7 +318,7 @@ await fs.clearRecent()
 
 ```typescript
 // Main factory
-import { createFSBridge, FSBridge } from 'fsbridge'
+import { createFSBridge, FSBridge } from 'onefs'
 
 // Types
 import type {
@@ -331,10 +331,10 @@ import type {
   FSBridgeCapabilities,
   Platform,
   StoredHandle,
-} from 'fsbridge'
+} from 'onefs'
 
 // Helpers
-import { ok, err, PLATFORM_CAPABILITIES } from 'fsbridge'
+import { ok, err, PLATFORM_CAPABILITIES } from 'onefs'
 
 // Individual adapters (for advanced use)
 import {
@@ -342,7 +342,7 @@ import {
   PickerIDBAdapter,
   TauriAdapter,
   CapacitorAdapter,
-} from 'fsbridge'
+} from 'onefs'
 ```
 
 ## Platform-Specific Setup

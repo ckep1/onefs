@@ -244,6 +244,19 @@ export class FSBridge {
   }
 
   /**
+   * Restore a previously opened directory.
+   * Only available on web-fs-access platform.
+   *
+   * @param stored - Handle from getRecentFiles() with type === 'directory'
+   */
+  async restoreDirectory(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeDirectory>> {
+    if (!this.adapter.restoreDirectory) {
+      return err('not_supported', `Directory restoration not supported on ${this.adapter.platform}`)
+    }
+    return this.adapter.restoreDirectory(stored)
+  }
+
+  /**
    * Remove a file from the recent files list.
    */
   async removeFromRecent(id: string): Promise<void> {
