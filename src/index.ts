@@ -13,6 +13,8 @@ import type {
   FSBridgeErrorCode,
   FSBridgeError,
   FSBridgeCapabilities,
+  PermissionMode,
+  PermissionStatus,
 } from './types'
 import { ok, err, PLATFORM_CAPABILITIES } from './types'
 
@@ -36,6 +38,8 @@ export type {
   FSBridgeErrorCode,
   FSBridgeError,
   FSBridgeCapabilities,
+  PermissionMode,
+  PermissionStatus,
 }
 
 export { ok, err, PLATFORM_CAPABILITIES }
@@ -248,12 +252,80 @@ export class FSBridge {
    * Only available on web-fs-access platform.
    *
    * @param stored - Handle from getRecentFiles() with type === 'directory'
+   * @param mode - Permission mode to request ('read' or 'readwrite')
    */
-  async restoreDirectory(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async restoreDirectory(stored: StoredHandle, mode?: PermissionMode): Promise<FSBridgeResult<FSBridgeDirectory>> {
     if (!this.adapter.restoreDirectory) {
       return err('not_supported', `Directory restoration not supported on ${this.adapter.platform}`)
     }
-    return this.adapter.restoreDirectory(stored)
+    return this.adapter.restoreDirectory(stored, mode)
+  }
+
+  /**
+   * Check current permission status on a file or directory.
+   * Only available on web-fs-access platform - returns 'granted' on others.
+   *
+   * @param target - File or directory to check
+   * @param mode - Permission mode to check ('read' or 'readwrite')
+   */
+  async queryPermission(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<PermissionStatus> {
+    if (!this.adapter.queryPermission) {
+      return 'granted'
+    }
+    return this.adapter.queryPermission(target, mode)
+  }
+
+  /**
+   * Request permission on a file or directory.
+   * Only available on web-fs-access platform - returns ok(true) on others.
+   *
+   * @param target - File or directory to request permission for
+   * @param mode - Permission mode to request ('read' or 'readwrite')
+   */
+  async requestPermission(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<FSBridgeResult<boolean>> {
+    if (!this.adapter.requestPermission) {
+      return ok(true)
+    }
+    return this.adapter.requestPermission(target, mode)
+  }
+
+  /**
+   * Store a directory by a named key (separate from recent files).
+   * Useful for app preferences like "output directory".
+   * Only available on web-fs-access platform.
+   *
+   * @param key - Unique key to store the directory under
+   * @param directory - Directory to persist
+   */
+  async setNamedDirectory(key: string, directory: FSBridgeDirectory): Promise<FSBridgeResult<boolean>> {
+    if (!this.adapter.setNamedDirectory) {
+      return err('not_supported', `Named directory storage not supported on ${this.adapter.platform}`)
+    }
+    return this.adapter.setNamedDirectory(key, directory)
+  }
+
+  /**
+   * Retrieve a previously stored named directory.
+   * Only available on web-fs-access platform.
+   *
+   * @param key - Key the directory was stored under
+   * @param mode - Permission mode to request ('read' or 'readwrite')
+   */
+  async getNamedDirectory(key: string, mode?: PermissionMode): Promise<FSBridgeResult<FSBridgeDirectory>> {
+    if (!this.adapter.getNamedDirectory) {
+      return err('not_supported', `Named directory storage not supported on ${this.adapter.platform}`)
+    }
+    return this.adapter.getNamedDirectory(key, mode)
+  }
+
+  /**
+   * Remove a named directory from storage.
+   *
+   * @param key - Key the directory was stored under
+   */
+  async removeNamedDirectory(key: string): Promise<void> {
+    if (!this.adapter.removeNamedDirectory) return
+    return this.adapter.removeNamedDirectory(key)
   }
 
   /**

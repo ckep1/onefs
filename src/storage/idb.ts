@@ -1,6 +1,6 @@
 import type { StoredHandle, StoredFile } from '../types'
 
-const DB_VERSION = 1
+const DB_VERSION = 2
 
 /**
  * IndexedDB storage manager for file handles and content.
@@ -43,6 +43,10 @@ export class IDBStorage {
 
         if (!db.objectStoreNames.contains('handleObjects')) {
           db.createObjectStore('handleObjects', { keyPath: 'id' })
+        }
+
+        if (!db.objectStoreNames.contains('namedHandles')) {
+          db.createObjectStore('namedHandles', { keyPath: 'key' })
         }
       }
     })
@@ -270,5 +274,77 @@ export class IDBStorage {
     for (const file of toRemove) {
       await this.removeFile(file.id)
     }
+  }
+
+  /**
+   * Store a handle by a named key (separate from recent files).
+   * Useful for app preferences like "output directory".
+   */
+  async setNamedHandle(
+    key: string,
+    handle: FileSystemFileHandle | FileSystemDirectoryHandle
+  ): Promise<void> {
+    const db = await this.getDB()
+
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('namedHandles', 'readwrite')
+      tx.onerror = () => reject(tx.error)
+
+      tx.objectStore('namedHandles').put({
+        key,
+        handle,
+        name: handle.name,
+        type: handle.kind,
+        storedAt: Date.now(),
+      })
+
+      tx.oncomplete = () => resolve()
+    })
+  }
+
+  /**
+   * Get a named handle by key.
+   */
+  async getNamedHandle(key: string): Promise<{
+    handle: FileSystemFileHandle | FileSystemDirectoryHandle
+    name: string
+    type: 'file' | 'directory'
+  } | null> {
+    const db = await this.getDB()
+
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('namedHandles', 'readonly')
+      const request = tx.objectStore('namedHandles').get(key)
+
+      request.onerror = () => reject(request.error)
+      request.onsuccess = () => {
+        const result = request.result
+        if (!result) {
+          resolve(null)
+        } else {
+          resolve({
+            handle: result.handle,
+            name: result.name,
+            type: result.type,
+          })
+        }
+      }
+    })
+  }
+
+  /**
+   * Remove a named handle.
+   */
+  async removeNamedHandle(key: string): Promise<void> {
+    const db = await this.getDB()
+
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('namedHandles', 'readwrite')
+      tx.onerror = () => reject(tx.error)
+
+      tx.objectStore('namedHandles').delete(key)
+
+      tx.oncomplete = () => resolve()
+    })
   }
 }

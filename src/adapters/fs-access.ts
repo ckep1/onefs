@@ -8,6 +8,8 @@ import type {
   FSBridgeEntry,
   StoredHandle,
   FSBridgeResult,
+  PermissionMode,
+  PermissionStatus,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
@@ -325,7 +327,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
-  async restoreDirectory(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async restoreDirectory(stored: StoredHandle, mode: PermissionMode = 'read'): Promise<FSBridgeResult<FSBridgeDirectory>> {
     const handle = await this.storage.getHandleObject(stored.id)
     if (!handle || handle.kind !== 'directory') {
       return err('not_found', 'Directory handle not found in storage')
@@ -334,11 +336,11 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     const dirHandle = handle as FileSystemDirectoryHandle
 
     try {
-      const permission = await dirHandle.queryPermission({ mode: 'read' })
+      const permission = await dirHandle.queryPermission({ mode })
       if (permission !== 'granted') {
-        const requested = await dirHandle.requestPermission({ mode: 'read' })
+        const requested = await dirHandle.requestPermission({ mode })
         if (requested !== 'granted') {
-          return err('permission_denied', 'Read permission denied')
+          return err('permission_denied', `${mode === 'readwrite' ? 'Write' : 'Read'} permission denied`)
         }
       }
 
@@ -357,6 +359,87 @@ export class FSAccessAdapter implements FSBridgeAdapter {
       }
       return err('io_error', error.message || 'Failed to restore directory', e)
     }
+  }
+
+  async queryPermission(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<PermissionStatus> {
+    const handle = target.handle
+    if (!handle) return 'denied'
+
+    try {
+      return await handle.queryPermission({ mode })
+    } catch {
+      return 'denied'
+    }
+  }
+
+  async requestPermission(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<FSBridgeResult<boolean>> {
+    const handle = target.handle
+    if (!handle) {
+      return err('not_supported', 'Cannot request permission without handle')
+    }
+
+    try {
+      const status = await handle.requestPermission({ mode })
+      if (status === 'granted') {
+        return ok(true)
+      }
+      return err('permission_denied', `${mode === 'readwrite' ? 'Write' : 'Read'} permission denied`)
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission request failed', e)
+      }
+      return err('io_error', error.message || 'Failed to request permission', e)
+    }
+  }
+
+  async setNamedDirectory(key: string, directory: FSBridgeDirectory): Promise<FSBridgeResult<boolean>> {
+    if (!directory.handle) {
+      return err('not_supported', 'Cannot persist directory without handle')
+    }
+    try {
+      await this.storage.setNamedHandle(key, directory.handle)
+      return ok(true)
+    } catch (e) {
+      return err('io_error', (e as Error).message || 'Failed to persist directory', e)
+    }
+  }
+
+  async getNamedDirectory(key: string, mode: PermissionMode = 'read'): Promise<FSBridgeResult<FSBridgeDirectory>> {
+    try {
+      const stored = await this.storage.getNamedHandle(key)
+      if (!stored || stored.type !== 'directory') {
+        return err('not_found', `No directory stored with key "${key}"`)
+      }
+
+      const handle = stored.handle as FileSystemDirectoryHandle
+      const permission = await handle.queryPermission({ mode })
+      if (permission !== 'granted') {
+        const requested = await handle.requestPermission({ mode })
+        if (requested !== 'granted') {
+          return err('permission_denied', `${mode === 'readwrite' ? 'Write' : 'Read'} permission denied`)
+        }
+      }
+
+      return ok({
+        id: key,
+        name: stored.name,
+        handle,
+      })
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'NotFoundError') {
+        return err('not_found', 'Directory no longer exists', e)
+      }
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied', e)
+      }
+      return err('io_error', error.message || 'Failed to get directory', e)
+    }
+  }
+
+  async removeNamedDirectory(key: string): Promise<void> {
+    await this.storage.removeNamedHandle(key)
   }
 
   async removeFromRecent(id: string): Promise<void> {

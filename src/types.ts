@@ -106,6 +106,9 @@ export interface FSBridgeDirectoryOptions {
   persist?: boolean
 }
 
+export type PermissionMode = 'read' | 'readwrite'
+export type PermissionStatus = 'granted' | 'denied' | 'prompt'
+
 /**
  * Represents a directory reference.
  */
@@ -171,6 +174,8 @@ export interface FSBridgeCapabilities {
    * - false: web-fallback (triggers download), capacitor (saves to app directory)
    */
   canSaveInPlace: boolean
+  /** Can check and request permissions on files/directories (web-fs-access only) */
+  permissions: boolean
 }
 
 export const PLATFORM_CAPABILITIES: Record<Platform, FSBridgeCapabilities> = {
@@ -182,6 +187,7 @@ export const PLATFORM_CAPABILITIES: Record<Platform, FSBridgeCapabilities> = {
     readDirectory: true,
     handlePersistence: true,
     canSaveInPlace: true,
+    permissions: true,
   },
   'web-fallback': {
     openFile: true,
@@ -191,6 +197,7 @@ export const PLATFORM_CAPABILITIES: Record<Platform, FSBridgeCapabilities> = {
     readDirectory: false,
     handlePersistence: false,
     canSaveInPlace: false,
+    permissions: false,
   },
   tauri: {
     openFile: true,
@@ -200,6 +207,7 @@ export const PLATFORM_CAPABILITIES: Record<Platform, FSBridgeCapabilities> = {
     readDirectory: true,
     handlePersistence: false,
     canSaveInPlace: true,
+    permissions: false,
   },
   capacitor: {
     openFile: true,
@@ -209,6 +217,7 @@ export const PLATFORM_CAPABILITIES: Record<Platform, FSBridgeCapabilities> = {
     readDirectory: 'limited',
     handlePersistence: false,
     canSaveInPlace: false,
+    permissions: false,
   },
 }
 
@@ -246,13 +255,28 @@ export interface FSBridgeAdapter {
   restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>>
 
   /** Restore a previously opened directory from storage (optional - check capabilities) */
-  restoreDirectory?(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeDirectory>>
+  restoreDirectory?(stored: StoredHandle, mode?: PermissionMode): Promise<FSBridgeResult<FSBridgeDirectory>>
 
   /** Remove a file from recent list */
   removeFromRecent(id: string): Promise<void>
 
   /** Clear all recent files */
   clearRecent(): Promise<void>
+
+  /** Check current permission status (optional - check capabilities.permissions) */
+  queryPermission?(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<PermissionStatus>
+
+  /** Request permission (optional - check capabilities.permissions) */
+  requestPermission?(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<FSBridgeResult<boolean>>
+
+  /** Store a directory by named key (optional - check capabilities.handlePersistence) */
+  setNamedDirectory?(key: string, directory: FSBridgeDirectory): Promise<FSBridgeResult<boolean>>
+
+  /** Retrieve a named directory (optional - check capabilities.handlePersistence) */
+  getNamedDirectory?(key: string, mode?: PermissionMode): Promise<FSBridgeResult<FSBridgeDirectory>>
+
+  /** Remove a named directory (optional - check capabilities.handlePersistence) */
+  removeNamedDirectory?(key: string): Promise<void>
 }
 
 export interface FSBridgeConfig {
