@@ -307,11 +307,53 @@ const file = await fs.restoreFile(recent[0])
 // On web-fs-access: Re-reads from disk (may prompt for permission)
 // On other platforms: Returns cached content from IndexedDB
 
+// Restore a directory with specific permission mode
+const dir = await fs.restoreDirectory(recent[0], 'readwrite')
+
 // Remove from recent
 await fs.removeFromRecent(id)
 
 // Clear all
 await fs.clearRecent()
+```
+
+## Permission Management (web-fs-access only)
+
+Check and request permissions on files and directories:
+
+```typescript
+// Check current permission status
+const status = await fs.queryPermission(directory, 'readwrite')
+// Returns: 'granted' | 'denied' | 'prompt'
+
+// Request permission (must be called during user gesture)
+const result = await fs.requestPermission(directory, 'readwrite')
+if (result.ok) {
+  // Permission granted
+}
+
+// On non-web-fs-access platforms, these return 'granted' and ok(true)
+```
+
+## Named Directory Storage (web-fs-access only)
+
+Store directories by key, separate from the recent files list. Useful for app preferences like output directories:
+
+```typescript
+// Open and store a directory by key
+const dir = await fs.openDirectory({ mode: 'readwrite' })
+if (dir.ok) {
+  await fs.setNamedDirectory('outputDir', dir.data)
+}
+
+// Retrieve later (automatically requests permission)
+const stored = await fs.getNamedDirectory('outputDir', 'readwrite')
+if (stored.ok) {
+  // Use stored.data.handle for file operations
+}
+
+// Remove
+await fs.removeNamedDirectory('outputDir')
 ```
 
 ## Exports
