@@ -1,6 +1,6 @@
 {
   "name": "onefs",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Cross-platform file system abstraction for web, Tauri, and Capacitor",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -27,6 +27,7 @@
   },
   "devDependencies": {
     "@capacitor/filesystem": "^6.0.0",
+    "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",
     "@tauri-apps/plugin-fs": "^2.0.0",
     "@types/node": "^22.19.1",
@@ -36,12 +37,24 @@
     "vitest": "^2.1.8"
   },
   "peerDependencies": {
+    "@capacitor/core": ">=6.0.0",
     "@capacitor/filesystem": ">=6.0.0",
+    "@capawesome/capacitor-file-picker": ">=6.0.0",
+    "@tauri-apps/api": ">=2.0.0",
     "@tauri-apps/plugin-dialog": ">=2.0.0",
     "@tauri-apps/plugin-fs": ">=2.0.0"
   },
   "peerDependenciesMeta": {
+    "@capacitor/core": {
+      "optional": true
+    },
     "@capacitor/filesystem": {
+      "optional": true
+    },
+    "@capawesome/capacitor-file-picker": {
+      "optional": true
+    },
+    "@tauri-apps/api": {
       "optional": true
     },
     "@tauri-apps/plugin-dialog": {

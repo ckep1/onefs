@@ -420,13 +420,70 @@ npm install @capacitor/filesystem
 npx cap sync
 ```
 
+For iOS Files app integration (users can drop files into your app's folder):
+
+Add to your `ios/App/App/Info.plist`:
+
+```xml
+<key>UIFileSharingEnabled</key>
+<true/>
+<key>LSSupportsOpeningDocumentsInPlace</key>
+<true/>
+```
+
+This exposes your app's Documents folder in the iOS Files app. Users can drag files there, and your app can scan them with `openDirectory()` and `scanDirectory()`.
+
+Optional: Install `@capawesome/capacitor-file-picker` for native file picker (otherwise falls back to HTML input).
+
+## Scanning Directories
+
+Recursively scan directories for files with optional filtering:
+
+```typescript
+const dir = await fs.openDirectory()
+if (!dir.ok) return
+
+// Scan for specific file types
+const result = await fs.scanDirectory(dir.data, {
+  extensions: ['.mp3', '.flac', '.wav'],
+  skipStats: true,  // Faster - don't fetch size/mtime
+  onProgress: (scanned, found) => {
+    console.log(`Scanned ${scanned} entries, found ${found} matches`)
+  },
+  signal: abortController.signal,  // Optional cancellation
+})
+
+if (result.ok) {
+  for (const entry of result.data) {
+    console.log(entry.name, entry.path)
+  }
+}
+```
+
+## Streaming URLs (Tauri/Capacitor)
+
+Get efficient URLs for media playback without loading files into memory:
+
+```typescript
+// From a directory entry (recommended for media apps)
+const url = await fs.getEntryUrl(entry)
+if (url) {
+  audioElement.src = url
+}
+
+// From a file object
+const url = await fs.getFileUrl(file)
+```
+
+On Tauri/Capacitor, this uses `convertFileSrc()` for efficient native streaming.
+On web platforms, falls back to blob URLs.
+
 ## Future Improvements
 
 The following features are planned but not yet implemented:
 
 - **Streaming support** for large files (ReadableStream)
 - **File watching** for external changes (FileSystemObserver)
-- **Recursive directory operations** for deep folder structures
 
 ## License
 

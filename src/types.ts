@@ -106,6 +106,20 @@ export interface OneFSDirectoryOptions {
   persist?: boolean
 }
 
+export interface OneFSReadDirectoryOptions {
+  /** Skip stat() calls for faster scanning (size/lastModified will be undefined) */
+  skipStats?: boolean
+}
+
+export interface OneFSScanOptions extends OneFSReadDirectoryOptions {
+  /** File extensions to include (e.g., ['.mp3', '.flac']). If not set, all files are included. */
+  extensions?: string[]
+  /** Callback for progress updates during recursive scan */
+  onProgress?: (scanned: number, found: number) => void
+  /** AbortSignal for cancellation support */
+  signal?: AbortSignal
+}
+
 export type PermissionMode = 'read' | 'readwrite'
 export type PermissionStatus = 'granted' | 'denied' | 'prompt'
 
@@ -213,10 +227,10 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     openFile: true,
     saveFile: true,
     saveFileAs: true,
-    openDirectory: 'limited',
-    readDirectory: 'limited',
+    openDirectory: true,
+    readDirectory: true,
     handlePersistence: false,
-    canSaveInPlace: false,
+    canSaveInPlace: true,
     permissions: false,
   },
 }
@@ -243,10 +257,19 @@ export interface OneFSAdapter {
   openDirectory?(options?: OneFSDirectoryOptions): Promise<OneFSResult<OneFSDirectory>>
 
   /** List directory contents as entries (metadata only, no content loaded) */
-  readDirectory?(directory: OneFSDirectory): Promise<OneFSResult<OneFSEntry[]>>
+  readDirectory?(directory: OneFSDirectory, options?: OneFSReadDirectoryOptions): Promise<OneFSResult<OneFSEntry[]>>
 
   /** Load a specific file from a directory */
   readFileFromDirectory?(directory: OneFSDirectory, entry: OneFSEntry): Promise<OneFSResult<OneFSFile>>
+
+  /** Recursively scan directory for files (Tauri/Capacitor only) */
+  scanDirectory?(directory: OneFSDirectory, options?: OneFSScanOptions): Promise<OneFSResult<OneFSEntry[]>>
+
+  /** Get efficient URL for file playback without loading into memory (Tauri only) */
+  getFileUrl?(file: OneFSFile): Promise<string>
+
+  /** Get efficient URL for entry without loading content (Tauri only) */
+  getEntryUrl?(entry: OneFSEntry): Promise<string | null>
 
   /** Get list of recently opened files/directories */
   getRecentFiles(): Promise<StoredHandle[]>

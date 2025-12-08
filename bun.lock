@@ -5,9 +5,10 @@
       "name": "fsbridge",
       "devDependencies": {
         "@capacitor/filesystem": "^6.0.0",
+        "@tauri-apps/api": "^2.0.0",
         "@tauri-apps/plugin-dialog": "^2.0.0",
         "@tauri-apps/plugin-fs": "^2.0.0",
-        "@types/node": "^22.10.0",
+        "@types/node": "^22.19.1",
         "typescript": "^5.7.2",
         "vite": "^6.0.3",
         "vite-plugin-dts": "^4.3.0",
@@ -15,11 +16,13 @@
       },
       "peerDependencies": {
         "@capacitor/filesystem": ">=6.0.0",
+        "@tauri-apps/api": ">=2.0.0",
         "@tauri-apps/plugin-dialog": ">=2.0.0",
         "@tauri-apps/plugin-fs": ">=2.0.0",
       },
       "optionalPeers": [
         "@capacitor/filesystem",
+        "@tauri-apps/api",
         "@tauri-apps/plugin-dialog",
         "@tauri-apps/plugin-fs",
       ],

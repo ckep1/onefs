@@ -6,6 +6,8 @@ import type {
   OneFSSaveOptions,
   OneFSDirectory,
   OneFSDirectoryOptions,
+  OneFSReadDirectoryOptions,
+  OneFSScanOptions,
   OneFSEntry,
   StoredHandle,
   Platform,
@@ -20,7 +22,7 @@ import { ok, err, PLATFORM_CAPABILITIES } from './types'
 
 import { FSAccessAdapter } from './adapters/fs-access'
 import { PickerIDBAdapter } from './adapters/picker-idb'
-import { TauriAdapter } from './adapters/tauri'
+import { TauriAdapter, getTauriFileUrl } from './adapters/tauri'
 import { CapacitorAdapter } from './adapters/capacitor'
 
 export type {
@@ -31,6 +33,8 @@ export type {
   OneFSSaveOptions,
   OneFSDirectory,
   OneFSDirectoryOptions,
+  OneFSReadDirectoryOptions,
+  OneFSScanOptions,
   OneFSEntry,
   StoredHandle,
   Platform,
@@ -43,7 +47,7 @@ export type {
 }
 
 export { ok, err, PLATFORM_CAPABILITIES }
-export { FSAccessAdapter, PickerIDBAdapter, TauriAdapter, CapacitorAdapter }
+export { FSAccessAdapter, PickerIDBAdapter, TauriAdapter, CapacitorAdapter, getTauriFileUrl }
 
 /**
  * Cross-platform file system abstraction.
@@ -225,6 +229,34 @@ export class OneFS {
       return err('not_supported', `Directory operations not supported on ${this.adapter.platform}`)
     }
     return this.adapter.readFileFromDirectory(directory, entry)
+  }
+
+  /**
+   * Recursively scan a directory for files.
+   * Only available on Tauri platform.
+   *
+   * @param directory - Directory to scan
+   * @param options - Scan options (extensions filter, progress callback, abort signal)
+   */
+  async scanDirectory(directory: OneFSDirectory, options?: OneFSScanOptions): Promise<OneFSResult<OneFSEntry[]>> {
+    if (!this.adapter.scanDirectory) {
+      return err('not_supported', `Recursive scanning not supported on ${this.adapter.platform}`)
+    }
+    return this.adapter.scanDirectory(directory, options)
+  }
+
+  /**
+   * Get an efficient streaming URL for a directory entry without loading content.
+   * Only available on Tauri platform. Use for audio/video where you don't need file in memory.
+   *
+   * @param entry - Entry from readDirectory() or scanDirectory()
+   * @returns Asset URL or null if not supported/available
+   */
+  async getEntryUrl(entry: OneFSEntry): Promise<string | null> {
+    if (!this.adapter.getEntryUrl) {
+      return null
+    }
+    return this.adapter.getEntryUrl(entry)
   }
 
   /**
