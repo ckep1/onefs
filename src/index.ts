@@ -1,18 +1,18 @@
 import type {
-  FSBridgeAdapter,
-  FSBridgeConfig,
-  FSBridgeFile,
-  FSBridgeOpenOptions,
-  FSBridgeSaveOptions,
-  FSBridgeDirectory,
-  FSBridgeDirectoryOptions,
-  FSBridgeEntry,
+  OneFSAdapter,
+  OneFSConfig,
+  OneFSFile,
+  OneFSOpenOptions,
+  OneFSSaveOptions,
+  OneFSDirectory,
+  OneFSDirectoryOptions,
+  OneFSEntry,
   StoredHandle,
   Platform,
-  FSBridgeResult,
-  FSBridgeErrorCode,
-  FSBridgeError,
-  FSBridgeCapabilities,
+  OneFSResult,
+  OneFSErrorCode,
+  OneFSError,
+  OneFSCapabilities,
   PermissionMode,
   PermissionStatus,
 } from './types'
@@ -24,20 +24,20 @@ import { TauriAdapter } from './adapters/tauri'
 import { CapacitorAdapter } from './adapters/capacitor'
 
 export type {
-  FSBridgeAdapter,
-  FSBridgeConfig,
-  FSBridgeFile,
-  FSBridgeOpenOptions,
-  FSBridgeSaveOptions,
-  FSBridgeDirectory,
-  FSBridgeDirectoryOptions,
-  FSBridgeEntry,
+  OneFSAdapter,
+  OneFSConfig,
+  OneFSFile,
+  OneFSOpenOptions,
+  OneFSSaveOptions,
+  OneFSDirectory,
+  OneFSDirectoryOptions,
+  OneFSEntry,
   StoredHandle,
   Platform,
-  FSBridgeResult,
-  FSBridgeErrorCode,
-  FSBridgeError,
-  FSBridgeCapabilities,
+  OneFSResult,
+  OneFSErrorCode,
+  OneFSError,
+  OneFSCapabilities,
   PermissionMode,
   PermissionStatus,
 }
@@ -56,7 +56,7 @@ export { FSAccessAdapter, PickerIDBAdapter, TauriAdapter, CapacitorAdapter }
  *
  * @example
  * ```typescript
- * const fs = createFSBridge({ appName: 'myapp' })
+ * const fs = createOneFS({ appName: 'myapp' })
  *
  * // Open a file
  * const result = await fs.openFile({ accept: ['.json'] })
@@ -73,11 +73,11 @@ export { FSAccessAdapter, PickerIDBAdapter, TauriAdapter, CapacitorAdapter }
  * }
  * ```
  */
-export class FSBridge {
-  private adapter: FSBridgeAdapter
-  private config: FSBridgeConfig
+export class OneFS {
+  private adapter: OneFSAdapter
+  private config: OneFSConfig
 
-  constructor(config: FSBridgeConfig) {
+  constructor(config: OneFSConfig) {
     this.config = {
       maxRecentFiles: 10,
       persistByDefault: true,
@@ -88,10 +88,10 @@ export class FSBridge {
     this.adapter = this.selectAdapter()
   }
 
-  private selectAdapter(): FSBridgeAdapter {
+  private selectAdapter(): OneFSAdapter {
     const { appName, maxRecentFiles, persistByDefault, useNativeFSAccess, preferredAdapter } = this.config
 
-    const adapters: Record<Platform, () => FSBridgeAdapter> = {
+    const adapters: Record<Platform, () => OneFSAdapter> = {
       tauri: () => new TauriAdapter(appName, maxRecentFiles, persistByDefault),
       capacitor: () => new CapacitorAdapter(appName, maxRecentFiles, persistByDefault),
       'web-fs-access': () => new FSAccessAdapter(appName, maxRecentFiles, persistByDefault),
@@ -121,7 +121,7 @@ export class FSBridge {
   }
 
   /** Platform capabilities (what operations are available) */
-  get capabilities(): FSBridgeCapabilities {
+  get capabilities(): OneFSCapabilities {
     return PLATFORM_CAPABILITIES[this.adapter.platform]
   }
 
@@ -140,9 +140,9 @@ export class FSBridge {
    * @param options - Picker configuration (accept, startIn, persist)
    * @returns The selected file with content loaded as Uint8Array
    */
-  async openFile(options?: FSBridgeOpenOptions): Promise<FSBridgeResult<FSBridgeFile>>
-  async openFile(options: FSBridgeOpenOptions & { multiple: true }): Promise<FSBridgeResult<FSBridgeFile[]>>
-  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
+  async openFile(options?: OneFSOpenOptions): Promise<OneFSResult<OneFSFile>>
+  async openFile(options: OneFSOpenOptions & { multiple: true }): Promise<OneFSResult<OneFSFile[]>>
+  async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     return this.adapter.openFile(options)
   }
 
@@ -150,7 +150,7 @@ export class FSBridge {
    * Open a file picker for multiple files.
    * Convenience wrapper around openFile with multiple: true.
    */
-  async openFiles(options: Omit<FSBridgeOpenOptions, 'multiple'> = {}): Promise<FSBridgeResult<FSBridgeFile[]>> {
+  async openFiles(options: Omit<OneFSOpenOptions, 'multiple'> = {}): Promise<OneFSResult<OneFSFile[]>> {
     const result = await this.adapter.openFile({ ...options, multiple: true })
     if (!result.ok) return result
     const data = Array.isArray(result.data) ? result.data : [result.data]
@@ -172,7 +172,7 @@ export class FSBridge {
    * @param content - New content as string or Uint8Array
    * @param options - Save options (persist)
    */
-  async saveFile(file: FSBridgeFile, content: Uint8Array | string, options?: FSBridgeSaveOptions): Promise<FSBridgeResult<boolean>> {
+  async saveFile(file: OneFSFile, content: Uint8Array | string, options?: OneFSSaveOptions): Promise<OneFSResult<boolean>> {
     return this.adapter.saveFile(file, content, options)
   }
 
@@ -182,7 +182,7 @@ export class FSBridge {
    * @param options - Save options (suggestedName, accept, persist)
    * @returns The newly created file
    */
-  async saveFileAs(content: Uint8Array | string, options?: FSBridgeSaveOptions): Promise<FSBridgeResult<FSBridgeFile>> {
+  async saveFileAs(content: Uint8Array | string, options?: OneFSSaveOptions): Promise<OneFSResult<OneFSFile>> {
     return this.adapter.saveFileAs(content, options)
   }
 
@@ -191,7 +191,7 @@ export class FSBridge {
    * Not available on web-fallback platform.
    * @param options - Directory picker options (mode, persist)
    */
-  async openDirectory(options?: FSBridgeDirectoryOptions): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async openDirectory(options?: OneFSDirectoryOptions): Promise<OneFSResult<OneFSDirectory>> {
     if (!this.adapter.openDirectory) {
       return err('not_supported', `Directory operations not supported on ${this.adapter.platform}`)
     }
@@ -205,7 +205,7 @@ export class FSBridge {
    * @param directory - Directory from openDirectory()
    * @returns Array of file and directory entries with metadata
    */
-  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeEntry[]>> {
+  async readDirectory(directory: OneFSDirectory): Promise<OneFSResult<OneFSEntry[]>> {
     if (!this.adapter.readDirectory) {
       return err('not_supported', `Directory operations not supported on ${this.adapter.platform}`)
     }
@@ -220,7 +220,7 @@ export class FSBridge {
    * @param entry - Entry from readDirectory() with kind === 'file'
    * @returns The file with content loaded
    */
-  async readFileFromDirectory(directory: FSBridgeDirectory, entry: FSBridgeEntry): Promise<FSBridgeResult<FSBridgeFile>> {
+  async readFileFromDirectory(directory: OneFSDirectory, entry: OneFSEntry): Promise<OneFSResult<OneFSFile>> {
     if (!this.adapter.readFileFromDirectory) {
       return err('not_supported', `Directory operations not supported on ${this.adapter.platform}`)
     }
@@ -243,7 +243,7 @@ export class FSBridge {
    *
    * @param stored - Handle from getRecentFiles()
    */
-  async restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>> {
+  async restoreFile(stored: StoredHandle): Promise<OneFSResult<OneFSFile>> {
     return this.adapter.restoreFile(stored)
   }
 
@@ -254,7 +254,7 @@ export class FSBridge {
    * @param stored - Handle from getRecentFiles() with type === 'directory'
    * @param mode - Permission mode to request ('read' or 'readwrite')
    */
-  async restoreDirectory(stored: StoredHandle, mode?: PermissionMode): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async restoreDirectory(stored: StoredHandle, mode?: PermissionMode): Promise<OneFSResult<OneFSDirectory>> {
     if (!this.adapter.restoreDirectory) {
       return err('not_supported', `Directory restoration not supported on ${this.adapter.platform}`)
     }
@@ -268,7 +268,7 @@ export class FSBridge {
    * @param target - File or directory to check
    * @param mode - Permission mode to check ('read' or 'readwrite')
    */
-  async queryPermission(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<PermissionStatus> {
+  async queryPermission(target: OneFSFile | OneFSDirectory, mode: PermissionMode): Promise<PermissionStatus> {
     if (!this.adapter.queryPermission) {
       return 'granted'
     }
@@ -282,7 +282,7 @@ export class FSBridge {
    * @param target - File or directory to request permission for
    * @param mode - Permission mode to request ('read' or 'readwrite')
    */
-  async requestPermission(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<FSBridgeResult<boolean>> {
+  async requestPermission(target: OneFSFile | OneFSDirectory, mode: PermissionMode): Promise<OneFSResult<boolean>> {
     if (!this.adapter.requestPermission) {
       return ok(true)
     }
@@ -297,7 +297,7 @@ export class FSBridge {
    * @param key - Unique key to store the directory under
    * @param directory - Directory to persist
    */
-  async setNamedDirectory(key: string, directory: FSBridgeDirectory): Promise<FSBridgeResult<boolean>> {
+  async setNamedDirectory(key: string, directory: OneFSDirectory): Promise<OneFSResult<boolean>> {
     if (!this.adapter.setNamedDirectory) {
       return err('not_supported', `Named directory storage not supported on ${this.adapter.platform}`)
     }
@@ -311,7 +311,7 @@ export class FSBridge {
    * @param key - Key the directory was stored under
    * @param mode - Permission mode to request ('read' or 'readwrite')
    */
-  async getNamedDirectory(key: string, mode?: PermissionMode): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async getNamedDirectory(key: string, mode?: PermissionMode): Promise<OneFSResult<OneFSDirectory>> {
     if (!this.adapter.getNamedDirectory) {
       return err('not_supported', `Named directory storage not supported on ${this.adapter.platform}`)
     }
@@ -349,7 +349,7 @@ export class FSBridge {
   /**
    * Read file content as UTF-8 string.
    */
-  readAsText(file: FSBridgeFile): string {
+  readAsText(file: OneFSFile): string {
     return new TextDecoder().decode(file.content)
   }
 
@@ -357,14 +357,14 @@ export class FSBridge {
    * Read file content as parsed JSON.
    * @throws SyntaxError if content is not valid JSON
    */
-  readAsJSON<T = unknown>(file: FSBridgeFile): T {
+  readAsJSON<T = unknown>(file: OneFSFile): T {
     return JSON.parse(this.readAsText(file))
   }
 
   /**
    * Read file content as data URL (data:mime;base64,...).
    */
-  readAsDataURL(file: FSBridgeFile): string {
+  readAsDataURL(file: OneFSFile): string {
     let binary = ''
     for (let i = 0; i < file.content.length; i++) {
       binary += String.fromCharCode(file.content[i])
@@ -375,7 +375,7 @@ export class FSBridge {
   /**
    * Read file content as Blob.
    */
-  readAsBlob(file: FSBridgeFile): Blob {
+  readAsBlob(file: OneFSFile): Blob {
     return new Blob([file.content.buffer as ArrayBuffer], { type: file.mimeType })
   }
 
@@ -383,26 +383,26 @@ export class FSBridge {
    * Read file content as object URL (blob:...).
    * Remember to call URL.revokeObjectURL() when done.
    */
-  readAsObjectURL(file: FSBridgeFile): string {
+  readAsObjectURL(file: OneFSFile): string {
     return URL.createObjectURL(this.readAsBlob(file))
   }
 }
 
 /**
- * Create a new FSBridge instance.
+ * Create a new OneFS instance.
  *
  * @param config - Configuration options
- * @returns FSBridge instance configured for the current platform
+ * @returns OneFS instance configured for the current platform
  *
  * @example
  * ```typescript
- * const fs = createFSBridge({
+ * const fs = createOneFS({
  *   appName: 'myapp',
  *   maxRecentFiles: 20,
  *   persistByDefault: true,
  * })
  * ```
  */
-export function createFSBridge(config: FSBridgeConfig): FSBridge {
-  return new FSBridge(config)
+export function createOneFS(config: OneFSConfig): OneFS {
+  return new OneFS(config)
 }

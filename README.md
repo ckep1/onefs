@@ -24,9 +24,9 @@ bun add onefs
 ## Quick Start
 
 ```typescript
-import { createFSBridge } from 'onefs'
+import { createOneFS } from 'onefs'
 
-const fs = createFSBridge({ appName: 'myapp' })
+const fs = createOneFS({ appName: 'myapp' })
 
 // Open a file
 const result = await fs.openFile({ accept: ['.json', '.txt'] })
@@ -150,12 +150,12 @@ for (const entry of entriesResult.data) {
 }
 ```
 
-### FSBridgeEntry
+### OneFSEntry
 
 Directory entries include metadata without content:
 
 ```typescript
-interface FSBridgeEntry {
+interface OneFSEntry {
   name: string              // "document.txt" or "subfolder"
   kind: 'file' | 'directory'
   size?: number             // File size in bytes (files only)
@@ -167,20 +167,20 @@ interface FSBridgeEntry {
 
 ## Error Handling
 
-All async operations return `FSBridgeResult<T>`:
+All async operations return `OneFSResult<T>`:
 
 ```typescript
-type FSBridgeResult<T> =
+type OneFSResult<T> =
   | { ok: true; data: T }
-  | { ok: false; error: FSBridgeError }
+  | { ok: false; error: OneFSError }
 
-interface FSBridgeError {
-  code: FSBridgeErrorCode
+interface OneFSError {
+  code: OneFSErrorCode
   message: string
   cause?: unknown  // Original error if available
 }
 
-type FSBridgeErrorCode =
+type OneFSErrorCode =
   | 'cancelled'           // User cancelled operation
   | 'permission_denied'   // No permission to access file/directory
   | 'not_supported'       // Operation not supported on this platform
@@ -217,7 +217,7 @@ const file = result.data
 ## Configuration
 
 ```typescript
-const fs = createFSBridge({
+const fs = createOneFS({
   appName: 'myapp',           // Required - used for IndexedDB database name
   maxRecentFiles: 10,         // Max files to remember (default: 10)
   persistByDefault: true,     // Store files/handles in IndexedDB (default: true)
@@ -269,10 +269,10 @@ console.log(fs.supportsHandlePersistence) // boolean
 | handlePersistence | Yes | No | No | No |
 | canSaveInPlace | Yes | No | Yes | No |
 
-## FSBridgeFile
+## OneFSFile
 
 ```typescript
-interface FSBridgeFile {
+interface OneFSFile {
   id: string              // Unique identifier
   name: string            // File name (e.g., "document.txt")
   path?: string           // Full path (Tauri/Capacitor only)
@@ -360,17 +360,17 @@ await fs.removeNamedDirectory('outputDir')
 
 ```typescript
 // Main factory
-import { createFSBridge, FSBridge } from 'onefs'
+import { createOneFS, OneFS } from 'onefs'
 
 // Types
 import type {
-  FSBridgeFile,
-  FSBridgeDirectory,
-  FSBridgeEntry,
-  FSBridgeResult,
-  FSBridgeError,
-  FSBridgeErrorCode,
-  FSBridgeCapabilities,
+  OneFSFile,
+  OneFSDirectory,
+  OneFSEntry,
+  OneFSResult,
+  OneFSError,
+  OneFSErrorCode,
+  OneFSCapabilities,
   Platform,
   StoredHandle,
 } from 'onefs'

@@ -1,14 +1,14 @@
 import type {
-  FSBridgeAdapter,
-  FSBridgeFile,
-  FSBridgeOpenOptions,
-  FSBridgeSaveOptions,
-  FSBridgeDirectory,
-  FSBridgeDirectoryOptions,
-  FSBridgeEntry,
+  OneFSAdapter,
+  OneFSFile,
+  OneFSOpenOptions,
+  OneFSSaveOptions,
+  OneFSDirectory,
+  OneFSDirectoryOptions,
+  OneFSEntry,
   StoredHandle,
   StoredFile,
-  FSBridgeResult,
+  OneFSResult,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
@@ -21,7 +21,7 @@ type TauriFS = typeof import('@tauri-apps/plugin-fs')
  * Adapter for Tauri desktop applications.
  * Provides full filesystem access via native dialogs.
  */
-export class TauriAdapter implements FSBridgeAdapter {
+export class TauriAdapter implements OneFSAdapter {
   platform = 'tauri' as const
   private storage: IDBStorage
   private dialog: TauriDialog | null = null
@@ -49,7 +49,7 @@ export class TauriAdapter implements FSBridgeAdapter {
     return { dialog: this.dialog, fs: this.fs }
   }
 
-  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
+  async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -70,7 +70,7 @@ export class TauriAdapter implements FSBridgeAdapter {
       }
 
       const paths = Array.isArray(result) ? result : [result]
-      const files: FSBridgeFile[] = []
+      const files: OneFSFile[] = []
 
       for (const path of paths) {
         const content = await fs.readFile(path)
@@ -114,10 +114,10 @@ export class TauriAdapter implements FSBridgeAdapter {
   }
 
   async saveFile(
-    file: FSBridgeFile,
+    file: OneFSFile,
     content: Uint8Array | string,
-    options?: FSBridgeSaveOptions
-  ): Promise<FSBridgeResult<boolean>> {
+    options?: OneFSSaveOptions
+  ): Promise<OneFSResult<boolean>> {
     if (!file.path) {
       return err('not_supported', 'Cannot save file without path - use saveFileAs instead')
     }
@@ -154,7 +154,7 @@ export class TauriAdapter implements FSBridgeAdapter {
     }
   }
 
-  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeResult<FSBridgeFile>> {
+  async saveFileAs(content: Uint8Array | string, options: OneFSSaveOptions = {}): Promise<OneFSResult<OneFSFile>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -212,7 +212,7 @@ export class TauriAdapter implements FSBridgeAdapter {
     }
   }
 
-  async openDirectory(options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async openDirectory(options: OneFSDirectoryOptions = {}): Promise<OneFSResult<OneFSDirectory>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -258,7 +258,7 @@ export class TauriAdapter implements FSBridgeAdapter {
    * List directory contents as entries (metadata only).
    * Use readFileFromDirectory() to load a specific file's content.
    */
-  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeEntry[]>> {
+  async readDirectory(directory: OneFSDirectory): Promise<OneFSResult<OneFSEntry[]>> {
     if (!directory.path) {
       return err('not_supported', 'Cannot read directory without path')
     }
@@ -266,7 +266,7 @@ export class TauriAdapter implements FSBridgeAdapter {
     try {
       const { fs } = await this.loadModules()
       const dirEntries = await fs.readDir(directory.path)
-      const entries: FSBridgeEntry[] = []
+      const entries: OneFSEntry[] = []
 
       for (const entry of dirEntries) {
         const filePath = `${directory.path}/${entry.name}`
@@ -316,9 +316,9 @@ export class TauriAdapter implements FSBridgeAdapter {
    * Load a specific file from a directory.
    */
   async readFileFromDirectory(
-    _directory: FSBridgeDirectory,
-    entry: FSBridgeEntry
-  ): Promise<FSBridgeResult<FSBridgeFile>> {
+    _directory: OneFSDirectory,
+    entry: OneFSEntry
+  ): Promise<OneFSResult<OneFSFile>> {
     if (!entry.path || entry.kind !== 'file') {
       return err('not_supported', 'Cannot read file without path')
     }
@@ -359,7 +359,7 @@ export class TauriAdapter implements FSBridgeAdapter {
     }))
   }
 
-  async restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>> {
+  async restoreFile(stored: StoredHandle): Promise<OneFSResult<OneFSFile>> {
     const file = await this.storage.getStoredFile(stored.id)
     if (!file) {
       return err('not_found', 'File not found in storage')
@@ -397,7 +397,7 @@ export class TauriAdapter implements FSBridgeAdapter {
     })
   }
 
-  async restoreDirectory(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async restoreDirectory(stored: StoredHandle): Promise<OneFSResult<OneFSDirectory>> {
     const file = await this.storage.getStoredFile(stored.id)
     if (!file || file.mimeType !== 'inode/directory') {
       return err('not_found', 'Directory not found in storage')

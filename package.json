@@ -1,6 +1,6 @@
 {
   "name": "onefs",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Cross-platform file system abstraction for web, Tauri, and Capacitor",
   "type": "module",
   "main": "./dist/index.cjs",

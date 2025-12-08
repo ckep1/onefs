@@ -1,4 +1,4 @@
-export type FSBridgeErrorCode =
+export type OneFSErrorCode =
   | 'cancelled'
   | 'permission_denied'
   | 'not_supported'
@@ -6,38 +6,38 @@ export type FSBridgeErrorCode =
   | 'io_error'
   | 'unknown'
 
-export interface FSBridgeError {
-  code: FSBridgeErrorCode
+export interface OneFSError {
+  code: OneFSErrorCode
   message: string
   cause?: unknown
 }
 
-export type FSBridgeResult<T> =
+export type OneFSResult<T> =
   | { ok: true; data: T }
-  | { ok: false; error: FSBridgeError }
+  | { ok: false; error: OneFSError }
 
 /**
  * Create a successful result.
  */
-export function ok<T>(data: T): FSBridgeResult<T> {
+export function ok<T>(data: T): OneFSResult<T> {
   return { ok: true, data }
 }
 
 /**
  * Create an error result.
  */
-export function err<T>(code: FSBridgeErrorCode, message: string, cause?: unknown): FSBridgeResult<T> {
+export function err<T>(code: OneFSErrorCode, message: string, cause?: unknown): OneFSResult<T> {
   return { ok: false, error: { code, message, cause } }
 }
 
 /**
  * Represents a file with its content loaded into memory.
- * Content is always a Uint8Array - use FSBridge helper methods to convert:
+ * Content is always a Uint8Array - use OneFS helper methods to convert:
  * - `readAsText(file)` for UTF-8 string
  * - `readAsJSON(file)` for parsed JSON
  * - `readAsBlob(file)` for Blob
  */
-export interface FSBridgeFile {
+export interface OneFSFile {
   /** Unique identifier for this file instance */
   id: string
   /** File name (e.g., "document.txt") */
@@ -60,7 +60,7 @@ export interface FSBridgeFile {
  * Represents a directory entry without loaded content.
  * Use `readFileFromDirectory()` to load a specific file's content.
  */
-export interface FSBridgeEntry {
+export interface OneFSEntry {
   /** Entry name (e.g., "document.txt" or "subfolder") */
   name: string
   /** Whether this is a file or directory */
@@ -75,7 +75,7 @@ export interface FSBridgeEntry {
   handle?: FileSystemHandle
 }
 
-export interface FSBridgeOpenOptions {
+export interface OneFSOpenOptions {
   /** File extensions to accept (e.g., ['.json', '.txt']) */
   accept?: string[]
   /** Allow selecting multiple files */
@@ -86,7 +86,7 @@ export interface FSBridgeOpenOptions {
   persist?: boolean
 }
 
-export interface FSBridgeSaveOptions {
+export interface OneFSSaveOptions {
   /** Suggested file name for the save dialog */
   suggestedName?: string
   /** File extensions to accept */
@@ -97,7 +97,7 @@ export interface FSBridgeSaveOptions {
   persist?: boolean
 }
 
-export interface FSBridgeDirectoryOptions {
+export interface OneFSDirectoryOptions {
   /** Starting directory for the picker */
   startIn?: 'desktop' | 'documents' | 'downloads' | 'music' | 'pictures' | 'videos'
   /** Access mode - 'readwrite' enables saving files to the directory */
@@ -112,7 +112,7 @@ export type PermissionStatus = 'granted' | 'denied' | 'prompt'
 /**
  * Represents a directory reference.
  */
-export interface FSBridgeDirectory {
+export interface OneFSDirectory {
   /** Unique identifier for this directory instance */
   id: string
   /** Directory name */
@@ -155,7 +155,7 @@ export type Platform = 'web-fs-access' | 'web-fallback' | 'tauri' | 'capacitor'
 /**
  * Describes what operations are available on the current platform.
  */
-export interface FSBridgeCapabilities {
+export interface OneFSCapabilities {
   /** Can open files via picker */
   openFile: boolean
   /** Can save to an existing file (in-place for fs-access/tauri, download for fallback) */
@@ -178,7 +178,7 @@ export interface FSBridgeCapabilities {
   permissions: boolean
 }
 
-export const PLATFORM_CAPABILITIES: Record<Platform, FSBridgeCapabilities> = {
+export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
   'web-fs-access': {
     openFile: true,
     saveFile: true,
@@ -224,38 +224,38 @@ export const PLATFORM_CAPABILITIES: Record<Platform, FSBridgeCapabilities> = {
 /**
  * Adapter interface implemented by each platform backend.
  */
-export interface FSBridgeAdapter {
+export interface OneFSAdapter {
   platform: Platform
 
   /** Check if this adapter can run in the current environment */
   isSupported(): boolean
 
   /** Open file picker and return selected file(s) with content */
-  openFile(options?: FSBridgeOpenOptions): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>>
+  openFile(options?: OneFSOpenOptions): Promise<OneFSResult<OneFSFile | OneFSFile[]>>
 
   /** Save content to an existing file (behavior varies by platform - see canSaveInPlace) */
-  saveFile(file: FSBridgeFile, content: Uint8Array | string, options?: FSBridgeSaveOptions): Promise<FSBridgeResult<boolean>>
+  saveFile(file: OneFSFile, content: Uint8Array | string, options?: OneFSSaveOptions): Promise<OneFSResult<boolean>>
 
   /** Open save dialog and write content to new file */
-  saveFileAs(content: Uint8Array | string, options?: FSBridgeSaveOptions): Promise<FSBridgeResult<FSBridgeFile>>
+  saveFileAs(content: Uint8Array | string, options?: OneFSSaveOptions): Promise<OneFSResult<OneFSFile>>
 
   /** Open directory picker (optional - check capabilities first) */
-  openDirectory?(options?: FSBridgeDirectoryOptions): Promise<FSBridgeResult<FSBridgeDirectory>>
+  openDirectory?(options?: OneFSDirectoryOptions): Promise<OneFSResult<OneFSDirectory>>
 
   /** List directory contents as entries (metadata only, no content loaded) */
-  readDirectory?(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeEntry[]>>
+  readDirectory?(directory: OneFSDirectory): Promise<OneFSResult<OneFSEntry[]>>
 
   /** Load a specific file from a directory */
-  readFileFromDirectory?(directory: FSBridgeDirectory, entry: FSBridgeEntry): Promise<FSBridgeResult<FSBridgeFile>>
+  readFileFromDirectory?(directory: OneFSDirectory, entry: OneFSEntry): Promise<OneFSResult<OneFSFile>>
 
   /** Get list of recently opened files/directories */
   getRecentFiles(): Promise<StoredHandle[]>
 
   /** Restore a previously opened file from storage */
-  restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>>
+  restoreFile(stored: StoredHandle): Promise<OneFSResult<OneFSFile>>
 
   /** Restore a previously opened directory from storage (optional - check capabilities) */
-  restoreDirectory?(stored: StoredHandle, mode?: PermissionMode): Promise<FSBridgeResult<FSBridgeDirectory>>
+  restoreDirectory?(stored: StoredHandle, mode?: PermissionMode): Promise<OneFSResult<OneFSDirectory>>
 
   /** Remove a file from recent list */
   removeFromRecent(id: string): Promise<void>
@@ -264,22 +264,22 @@ export interface FSBridgeAdapter {
   clearRecent(): Promise<void>
 
   /** Check current permission status (optional - check capabilities.permissions) */
-  queryPermission?(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<PermissionStatus>
+  queryPermission?(target: OneFSFile | OneFSDirectory, mode: PermissionMode): Promise<PermissionStatus>
 
   /** Request permission (optional - check capabilities.permissions) */
-  requestPermission?(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<FSBridgeResult<boolean>>
+  requestPermission?(target: OneFSFile | OneFSDirectory, mode: PermissionMode): Promise<OneFSResult<boolean>>
 
   /** Store a directory by named key (optional - check capabilities.handlePersistence) */
-  setNamedDirectory?(key: string, directory: FSBridgeDirectory): Promise<FSBridgeResult<boolean>>
+  setNamedDirectory?(key: string, directory: OneFSDirectory): Promise<OneFSResult<boolean>>
 
   /** Retrieve a named directory (optional - check capabilities.handlePersistence) */
-  getNamedDirectory?(key: string, mode?: PermissionMode): Promise<FSBridgeResult<FSBridgeDirectory>>
+  getNamedDirectory?(key: string, mode?: PermissionMode): Promise<OneFSResult<OneFSDirectory>>
 
   /** Remove a named directory (optional - check capabilities.handlePersistence) */
   removeNamedDirectory?(key: string): Promise<void>
 }
 
-export interface FSBridgeConfig {
+export interface OneFSConfig {
   /** Application name - used for IndexedDB database naming */
   appName: string
   /** Maximum number of recent files to store (default: 10) */

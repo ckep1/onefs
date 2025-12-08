@@ -1,14 +1,14 @@
 import type {
-  FSBridgeAdapter,
-  FSBridgeFile,
-  FSBridgeOpenOptions,
-  FSBridgeSaveOptions,
-  FSBridgeDirectory,
-  FSBridgeDirectoryOptions,
-  FSBridgeEntry,
+  OneFSAdapter,
+  OneFSFile,
+  OneFSOpenOptions,
+  OneFSSaveOptions,
+  OneFSDirectory,
+  OneFSDirectoryOptions,
+  OneFSEntry,
   StoredHandle,
   StoredFile,
-  FSBridgeResult,
+  OneFSResult,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
@@ -23,7 +23,7 @@ type CapacitorFilesystem = typeof import('@capacitor/filesystem')
  * Note: saveFile() saves to the app's Data directory, not the original location.
  * Check capabilities.canSaveInPlace to detect this behavior.
  */
-export class CapacitorAdapter implements FSBridgeAdapter {
+export class CapacitorAdapter implements OneFSAdapter {
   platform = 'capacitor' as const
   private storage: IDBStorage
   private filesystem: CapacitorFilesystem | null = null
@@ -45,7 +45,7 @@ export class CapacitorAdapter implements FSBridgeAdapter {
     return this.filesystem
   }
 
-  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
+  async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
     const accept = options.accept?.join(',') ?? '*/*'
     const input = document.createElement('input')
@@ -62,13 +62,13 @@ export class CapacitorAdapter implements FSBridgeAdapter {
         }
 
         try {
-          const files: FSBridgeFile[] = []
+          const files: OneFSFile[] = []
 
           for (let i = 0; i < fileList.length; i++) {
             const file = fileList[i]
             const content = new Uint8Array(await file.arrayBuffer())
             const id = generateId()
-            const syntheticPath = `fsbridge_${id}_${file.name}`
+            const syntheticPath = `onefs_${id}_${file.name}`
 
             if (shouldPersist) {
               const storedFile: StoredFile = {
@@ -111,17 +111,17 @@ export class CapacitorAdapter implements FSBridgeAdapter {
    * Save file to app's Data directory (not original location).
    */
   async saveFile(
-    file: FSBridgeFile,
+    file: OneFSFile,
     content: Uint8Array | string,
-    options?: FSBridgeSaveOptions
-  ): Promise<FSBridgeResult<boolean>> {
+    options?: OneFSSaveOptions
+  ): Promise<OneFSResult<boolean>> {
     const shouldPersist = options?.persist ?? this.persistByDefault
 
     try {
       const { Filesystem, Directory } = await this.loadModule()
 
       const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
-      const fileName = file.path ?? `fsbridge_${file.id}_${file.name}`
+      const fileName = file.path ?? `onefs_${file.id}_${file.name}`
 
       await Filesystem.writeFile({
         path: fileName,
@@ -153,7 +153,7 @@ export class CapacitorAdapter implements FSBridgeAdapter {
     }
   }
 
-  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeResult<FSBridgeFile>> {
+  async saveFileAs(content: Uint8Array | string, options: OneFSSaveOptions = {}): Promise<OneFSResult<OneFSFile>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -162,7 +162,7 @@ export class CapacitorAdapter implements FSBridgeAdapter {
       const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
       const name = options.suggestedName ?? 'untitled'
       const id = generateId()
-      const fileName = `fsbridge_${id}_${name}`
+      const fileName = `onefs_${id}_${name}`
 
       await Filesystem.writeFile({
         path: fileName,
@@ -205,7 +205,7 @@ export class CapacitorAdapter implements FSBridgeAdapter {
   /**
    * Opens the Documents directory (limited - no picker).
    */
-  async openDirectory(options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async openDirectory(options: OneFSDirectoryOptions = {}): Promise<OneFSResult<OneFSDirectory>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -255,7 +255,7 @@ export class CapacitorAdapter implements FSBridgeAdapter {
    * List directory contents as entries (metadata only).
    * Limited to Documents directory.
    */
-  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeEntry[]>> {
+  async readDirectory(directory: OneFSDirectory): Promise<OneFSResult<OneFSEntry[]>> {
     try {
       const { Filesystem, Directory } = await this.loadModule()
 
@@ -264,7 +264,7 @@ export class CapacitorAdapter implements FSBridgeAdapter {
         directory: Directory.Documents,
       })
 
-      const entries: FSBridgeEntry[] = []
+      const entries: OneFSEntry[] = []
 
       for (const entry of result.files) {
         const filePath = directory.path ? `${directory.path}/${entry.name}` : entry.name
@@ -303,9 +303,9 @@ export class CapacitorAdapter implements FSBridgeAdapter {
    * Load a specific file from a directory.
    */
   async readFileFromDirectory(
-    _directory: FSBridgeDirectory,
-    entry: FSBridgeEntry
-  ): Promise<FSBridgeResult<FSBridgeFile>> {
+    _directory: OneFSDirectory,
+    entry: OneFSEntry
+  ): Promise<OneFSResult<OneFSFile>> {
     if (!entry.path || entry.kind !== 'file') {
       return err('not_supported', 'Cannot read file without path')
     }
@@ -358,7 +358,7 @@ export class CapacitorAdapter implements FSBridgeAdapter {
     }))
   }
 
-  async restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>> {
+  async restoreFile(stored: StoredHandle): Promise<OneFSResult<OneFSFile>> {
     const file = await this.storage.getStoredFile(stored.id)
     if (!file) {
       return err('not_found', 'File not found in storage')

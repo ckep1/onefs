@@ -12,7 +12,7 @@ export class IDBStorage {
   private maxRecentFiles: number
 
   constructor(appName: string, maxRecentFiles = 10) {
-    this.dbName = `fsbridge-${appName}`
+    this.dbName = `onefs-${appName}`
     this.maxRecentFiles = maxRecentFiles
   }
 

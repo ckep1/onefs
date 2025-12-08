@@ -1,11 +1,11 @@
 import type {
-  FSBridgeAdapter,
-  FSBridgeFile,
-  FSBridgeOpenOptions,
-  FSBridgeSaveOptions,
+  OneFSAdapter,
+  OneFSFile,
+  OneFSOpenOptions,
+  OneFSSaveOptions,
   StoredHandle,
   StoredFile,
-  FSBridgeResult,
+  OneFSResult,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
@@ -18,7 +18,7 @@ import { generateId, getMimeType } from '../utils'
  * Note: saveFile() triggers a download rather than saving in-place.
  * Check capabilities.canSaveInPlace to detect this behavior.
  */
-export class PickerIDBAdapter implements FSBridgeAdapter {
+export class PickerIDBAdapter implements OneFSAdapter {
   platform = 'web-fallback' as const
   private storage: IDBStorage
   private persistByDefault: boolean
@@ -32,7 +32,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
     return typeof document !== 'undefined' && 'createElement' in document
   }
 
-  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
+  async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     return new Promise((resolve) => {
@@ -52,7 +52,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
         }
 
         try {
-          const files: FSBridgeFile[] = []
+          const files: OneFSFile[] = []
 
           for (let i = 0; i < fileList.length; i++) {
             const file = fileList[i]
@@ -99,10 +99,10 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
    * The file is also stored in IndexedDB for restoration via getRecentFiles().
    */
   async saveFile(
-    file: FSBridgeFile,
+    file: OneFSFile,
     content: Uint8Array | string,
-    options?: FSBridgeSaveOptions
-  ): Promise<FSBridgeResult<boolean>> {
+    options?: OneFSSaveOptions
+  ): Promise<OneFSResult<boolean>> {
     const shouldPersist = options?.persist ?? this.persistByDefault
     const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
 
@@ -131,7 +131,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
   /**
    * Save as a new file by triggering a download.
    */
-  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeResult<FSBridgeFile>> {
+  async saveFileAs(content: Uint8Array | string, options: OneFSSaveOptions = {}): Promise<OneFSResult<OneFSFile>> {
     const shouldPersist = options.persist ?? this.persistByDefault
     const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
     const name = options.suggestedName ?? 'untitled'
@@ -190,7 +190,7 @@ export class PickerIDBAdapter implements FSBridgeAdapter {
     }))
   }
 
-  async restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>> {
+  async restoreFile(stored: StoredHandle): Promise<OneFSResult<OneFSFile>> {
     const file = await this.storage.getStoredFile(stored.id)
     if (!file) {
       return err('not_found', 'File not found in storage')

@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-12-07
+
+### BREAKING CHANGES
+
+This release renames all public APIs from `FSBridge*` to `OneFS*` for consistency with the package name.
+
+**Migration guide:**
+
+| Old Name | New Name |
+|----------|----------|
+| `FSBridge` | `OneFS` |
+| `createFSBridge` | `createOneFS` |
+| `FSBridgeFile` | `OneFSFile` |
+| `FSBridgeDirectory` | `OneFSDirectory` |
+| `FSBridgeEntry` | `OneFSEntry` |
+| `FSBridgeResult` | `OneFSResult` |
+| `FSBridgeError` | `OneFSError` |
+| `FSBridgeErrorCode` | `OneFSErrorCode` |
+| `FSBridgeCapabilities` | `OneFSCapabilities` |
+| `FSBridgeConfig` | `OneFSConfig` |
+| `FSBridgeAdapter` | `OneFSAdapter` |
+| `FSBridgeOpenOptions` | `OneFSOpenOptions` |
+| `FSBridgeSaveOptions` | `OneFSSaveOptions` |
+| `FSBridgeDirectoryOptions` | `OneFSDirectoryOptions` |
+
+IndexedDB database name changed from `fsbridge-{appName}` to `onefs-{appName}`.
+Capacitor synthetic paths changed from `fsbridge_*` to `onefs_*`.
+
 ## [0.2.1] - 2025-11-30
 
 ### Added

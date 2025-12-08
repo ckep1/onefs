@@ -1,13 +1,13 @@
 import type {
-  FSBridgeAdapter,
-  FSBridgeFile,
-  FSBridgeOpenOptions,
-  FSBridgeSaveOptions,
-  FSBridgeDirectory,
-  FSBridgeDirectoryOptions,
-  FSBridgeEntry,
+  OneFSAdapter,
+  OneFSFile,
+  OneFSOpenOptions,
+  OneFSSaveOptions,
+  OneFSDirectory,
+  OneFSDirectoryOptions,
+  OneFSEntry,
   StoredHandle,
-  FSBridgeResult,
+  OneFSResult,
   PermissionMode,
   PermissionStatus,
 } from '../types'
@@ -35,7 +35,7 @@ function buildAcceptTypes(accept?: string[]): FilePickerAcceptType[] {
  * Adapter for the File System Access API (modern browsers).
  * Provides full read/write access with handle persistence.
  */
-export class FSAccessAdapter implements FSBridgeAdapter {
+export class FSAccessAdapter implements OneFSAdapter {
   platform = 'web-fs-access' as const
   private storage: IDBStorage
   private persistByDefault: boolean
@@ -49,7 +49,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     return 'showOpenFilePicker' in window
   }
 
-  async openFile(options: FSBridgeOpenOptions = {}): Promise<FSBridgeResult<FSBridgeFile | FSBridgeFile[]>> {
+  async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -59,7 +59,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
         startIn: options.startIn,
       })
 
-      const files: FSBridgeFile[] = []
+      const files: OneFSFile[] = []
 
       for (const handle of handles) {
         const file = await handle.getFile()
@@ -95,10 +95,10 @@ export class FSAccessAdapter implements FSBridgeAdapter {
   }
 
   async saveFile(
-    file: FSBridgeFile,
+    file: OneFSFile,
     content: Uint8Array | string,
-    _options?: FSBridgeSaveOptions
-  ): Promise<FSBridgeResult<boolean>> {
+    _options?: OneFSSaveOptions
+  ): Promise<OneFSResult<boolean>> {
     if (!file.handle) {
       return err('not_supported', 'Cannot save file without handle - use saveFileAs instead')
     }
@@ -130,7 +130,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
-  async saveFileAs(content: Uint8Array | string, options: FSBridgeSaveOptions = {}): Promise<FSBridgeResult<FSBridgeFile>> {
+  async saveFileAs(content: Uint8Array | string, options: OneFSSaveOptions = {}): Promise<OneFSResult<OneFSFile>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -173,7 +173,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
-  async openDirectory(options: FSBridgeDirectoryOptions = {}): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async openDirectory(options: OneFSDirectoryOptions = {}): Promise<OneFSResult<OneFSDirectory>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
@@ -208,13 +208,13 @@ export class FSAccessAdapter implements FSBridgeAdapter {
    * List directory contents as entries (metadata only, no content loaded).
    * Use readFileFromDirectory() to load a specific file's content.
    */
-  async readDirectory(directory: FSBridgeDirectory): Promise<FSBridgeResult<FSBridgeEntry[]>> {
+  async readDirectory(directory: OneFSDirectory): Promise<OneFSResult<OneFSEntry[]>> {
     if (!directory.handle) {
       return err('not_supported', 'Cannot read directory without handle')
     }
 
     try {
-      const entries: FSBridgeEntry[] = []
+      const entries: OneFSEntry[] = []
 
       for await (const entry of directory.handle.values()) {
         if (entry.kind === 'file') {
@@ -249,9 +249,9 @@ export class FSAccessAdapter implements FSBridgeAdapter {
    * Load a specific file from a directory.
    */
   async readFileFromDirectory(
-    _directory: FSBridgeDirectory,
-    entry: FSBridgeEntry
-  ): Promise<FSBridgeResult<FSBridgeFile>> {
+    _directory: OneFSDirectory,
+    entry: OneFSEntry
+  ): Promise<OneFSResult<OneFSFile>> {
     if (!entry.handle || entry.kind !== 'file') {
       return err('not_supported', 'Cannot read file without handle')
     }
@@ -286,7 +286,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     return this.storage.getStoredHandles()
   }
 
-  async restoreFile(stored: StoredHandle): Promise<FSBridgeResult<FSBridgeFile>> {
+  async restoreFile(stored: StoredHandle): Promise<OneFSResult<OneFSFile>> {
     const handle = await this.storage.getHandleObject(stored.id)
     if (!handle || handle.kind !== 'file') {
       return err('not_found', 'File handle not found in storage')
@@ -327,7 +327,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
-  async restoreDirectory(stored: StoredHandle, mode: PermissionMode = 'read'): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async restoreDirectory(stored: StoredHandle, mode: PermissionMode = 'read'): Promise<OneFSResult<OneFSDirectory>> {
     const handle = await this.storage.getHandleObject(stored.id)
     if (!handle || handle.kind !== 'directory') {
       return err('not_found', 'Directory handle not found in storage')
@@ -361,7 +361,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
-  async queryPermission(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<PermissionStatus> {
+  async queryPermission(target: OneFSFile | OneFSDirectory, mode: PermissionMode): Promise<PermissionStatus> {
     const handle = target.handle
     if (!handle) return 'denied'
 
@@ -372,7 +372,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
-  async requestPermission(target: FSBridgeFile | FSBridgeDirectory, mode: PermissionMode): Promise<FSBridgeResult<boolean>> {
+  async requestPermission(target: OneFSFile | OneFSDirectory, mode: PermissionMode): Promise<OneFSResult<boolean>> {
     const handle = target.handle
     if (!handle) {
       return err('not_supported', 'Cannot request permission without handle')
@@ -393,7 +393,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
-  async setNamedDirectory(key: string, directory: FSBridgeDirectory): Promise<FSBridgeResult<boolean>> {
+  async setNamedDirectory(key: string, directory: OneFSDirectory): Promise<OneFSResult<boolean>> {
     if (!directory.handle) {
       return err('not_supported', 'Cannot persist directory without handle')
     }
@@ -405,7 +405,7 @@ export class FSAccessAdapter implements FSBridgeAdapter {
     }
   }
 
-  async getNamedDirectory(key: string, mode: PermissionMode = 'read'): Promise<FSBridgeResult<FSBridgeDirectory>> {
+  async getNamedDirectory(key: string, mode: PermissionMode = 'read'): Promise<OneFSResult<OneFSDirectory>> {
     try {
       const stored = await this.storage.getNamedHandle(key)
       if (!stored || stored.type !== 'directory') {
