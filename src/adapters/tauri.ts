@@ -339,10 +339,12 @@ export class TauriAdapter implements OneFSAdapter {
 
   /**
    * Load a specific file from a directory.
+   * Note: maxBytes option is not yet implemented for Tauri (full file is always loaded).
    */
   async readFileFromDirectory(
     _directory: OneFSDirectory,
-    entry: OneFSEntry
+    entry: OneFSEntry,
+    _options?: { maxBytes?: number }
   ): Promise<OneFSResult<OneFSFile>> {
     if (!entry.path || entry.kind !== 'file') {
       return err('not_supported', 'Cannot read file without path')
@@ -391,7 +393,7 @@ export class TauriAdapter implements OneFSAdapter {
       return err('not_supported', 'Cannot scan directory without path')
     }
 
-    const { extensions, onProgress, signal, skipStats } = options
+    const { extensions, onProgress, onError, signal, skipStats } = options
     const extensionSet = extensions?.length
       ? new Set(extensions.map((e) => e.toLowerCase().replace(/^\./, '')))
       : null
@@ -466,8 +468,7 @@ export class TauriAdapter implements OneFSAdapter {
             await new Promise((resolve) => setTimeout(resolve, 0))
           }
         } catch (dirError) {
-          // Log but continue scanning other directories
-          console.error(`[TauriAdapter] Error scanning ${currentDir}:`, dirError)
+          onError?.(currentDir, dirError)
         }
       }
 

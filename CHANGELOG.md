@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-12-13
+
+### Added
+
+- `OneFSScanOptions.onError` callback for handling subdirectory scan errors (replaces console.error)
+- `readFileFromDirectory()` now supports `maxBytes` option for partial file reads
+- CapacitorAdapter: Partial reads use Range headers via `convertFileSrc` for efficient memory usage
+
+### Changed
+
+- `scanDirectory()` errors are now silent by default; use `onError` callback to handle them
+- Removed unused `StoredFile` import from CapacitorAdapter
+
+### Fixed
+
+- Added `@capacitor/core` to devDependencies for build consistency
+
 ## [0.4.1] - 2025-12-08
 
 ### Fixed

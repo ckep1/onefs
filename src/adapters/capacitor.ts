@@ -9,7 +9,6 @@ import type {
   OneFSScanOptions,
   OneFSEntry,
   StoredHandle,
-  StoredFile,
   OneFSResult,
 } from '../types'
 import { ok, err } from '../types'
@@ -419,7 +418,7 @@ export class CapacitorAdapter implements OneFSAdapter {
     directory: OneFSDirectory,
     options: OneFSScanOptions = {}
   ): Promise<OneFSResult<OneFSEntry[]>> {
-    const { extensions, onProgress, signal, skipStats } = options
+    const { extensions, onProgress, onError, signal, skipStats } = options
     const extensionSet = extensions?.length
       ? new Set(extensions.map(e => e.toLowerCase().replace(/^\./, '')))
       : null
@@ -452,7 +451,9 @@ export class CapacitorAdapter implements OneFSAdapter {
               // Check extension filter
               if (extensionSet) {
                 const ext = entry.name.split('.').pop()?.toLowerCase()
-                if (!ext || !extensionSet.has(ext)) continue
+                if (!ext || !extensionSet.has(ext)) {
+                  continue
+                }
               }
 
               if (skipStats) {
@@ -482,7 +483,7 @@ export class CapacitorAdapter implements OneFSAdapter {
             await new Promise(resolve => setTimeout(resolve, 0))
           }
         } catch (dirError) {
-          console.error(`[CapacitorAdapter] Error scanning ${currentDir}:`, dirError)
+          onError?.(currentDir, dirError)
         }
       }
 
@@ -505,10 +506,12 @@ export class CapacitorAdapter implements OneFSAdapter {
 
   /**
    * Load a specific file from a directory.
+   * Supports partial reads via maxBytes option to reduce memory usage for large files.
    */
   async readFileFromDirectory(
     _directory: OneFSDirectory,
-    entry: OneFSEntry
+    entry: OneFSEntry,
+    options?: { maxBytes?: number }
   ): Promise<OneFSResult<OneFSFile>> {
     if (!entry.path || entry.kind !== 'file') {
       return err('not_supported', 'Cannot read file without path')
@@ -516,7 +519,41 @@ export class CapacitorAdapter implements OneFSAdapter {
 
     try {
       const { Filesystem, Directory } = await this.loadFilesystem()
+      const { Capacitor } = await this.loadCore()
 
+      // For partial reads on large files, use fetch with Range header
+      if (options?.maxBytes && entry.size && entry.size > options.maxBytes) {
+        try {
+          const uri = await Filesystem.getUri({
+            path: entry.path,
+            directory: Directory.Documents,
+          })
+          const nativeUrl = Capacitor.convertFileSrc(uri.uri)
+
+          const response = await fetch(nativeUrl, {
+            headers: { Range: `bytes=0-${options.maxBytes - 1}` }
+          })
+
+          if (response.ok || response.status === 206) {
+            const arrayBuffer = await response.arrayBuffer()
+            const content = new Uint8Array(arrayBuffer)
+
+            return ok({
+              id: generateId(),
+              name: entry.name,
+              path: entry.path,
+              content,
+              mimeType: getMimeType(entry.name),
+              size: content.byteLength,
+              lastModified: entry.lastModified ?? Date.now(),
+            })
+          }
+        } catch (partialError) {
+          // Fallback to full read
+        }
+      }
+
+      // Full file read (original behavior)
       const fileData = await Filesystem.readFile({
         path: entry.path,
         directory: Directory.Documents,

@@ -222,13 +222,14 @@ export class OneFS {
    *
    * @param directory - Directory containing the file
    * @param entry - Entry from readDirectory() with kind === 'file'
+   * @param options - Optional: maxBytes to read only first N bytes (for metadata extraction)
    * @returns The file with content loaded
    */
-  async readFileFromDirectory(directory: OneFSDirectory, entry: OneFSEntry): Promise<OneFSResult<OneFSFile>> {
+  async readFileFromDirectory(directory: OneFSDirectory, entry: OneFSEntry, options?: { maxBytes?: number }): Promise<OneFSResult<OneFSFile>> {
     if (!this.adapter.readFileFromDirectory) {
       return err('not_supported', `Directory operations not supported on ${this.adapter.platform}`)
     }
-    return this.adapter.readFileFromDirectory(directory, entry)
+    return this.adapter.readFileFromDirectory(directory, entry, options)
   }
 
   /**

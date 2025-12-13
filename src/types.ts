@@ -116,6 +116,8 @@ export interface OneFSScanOptions extends OneFSReadDirectoryOptions {
   extensions?: string[]
   /** Callback for progress updates during recursive scan */
   onProgress?: (scanned: number, found: number) => void
+  /** Callback for errors encountered while scanning subdirectories (silent by default) */
+  onError?: (path: string, error: unknown) => void
   /** AbortSignal for cancellation support */
   signal?: AbortSignal
 }
@@ -259,8 +261,8 @@ export interface OneFSAdapter {
   /** List directory contents as entries (metadata only, no content loaded) */
   readDirectory?(directory: OneFSDirectory, options?: OneFSReadDirectoryOptions): Promise<OneFSResult<OneFSEntry[]>>
 
-  /** Load a specific file from a directory */
-  readFileFromDirectory?(directory: OneFSDirectory, entry: OneFSEntry): Promise<OneFSResult<OneFSFile>>
+  /** Load a specific file from a directory. Supports partial reads via maxBytes option. */
+  readFileFromDirectory?(directory: OneFSDirectory, entry: OneFSEntry, options?: { maxBytes?: number }): Promise<OneFSResult<OneFSFile>>
 
   /** Recursively scan directory for files (Tauri/Capacitor only) */
   scanDirectory?(directory: OneFSDirectory, options?: OneFSScanOptions): Promise<OneFSResult<OneFSEntry[]>>

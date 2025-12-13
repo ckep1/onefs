@@ -247,10 +247,12 @@ export class FSAccessAdapter implements OneFSAdapter {
 
   /**
    * Load a specific file from a directory.
+   * Note: maxBytes option is not supported on web-fs-access (full file is always loaded).
    */
   async readFileFromDirectory(
     _directory: OneFSDirectory,
-    entry: OneFSEntry
+    entry: OneFSEntry,
+    _options?: { maxBytes?: number }
   ): Promise<OneFSResult<OneFSFile>> {
     if (!entry.handle || entry.kind !== 'file') {
       return err('not_supported', 'Cannot read file without handle')
