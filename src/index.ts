@@ -22,8 +22,9 @@ import { ok, err, PLATFORM_CAPABILITIES } from './types'
 
 import { FSAccessAdapter } from './adapters/fs-access'
 import { PickerIDBAdapter } from './adapters/picker-idb'
-import { TauriAdapter, getTauriFileUrl } from './adapters/tauri'
+import { TauriAdapter } from './adapters/tauri'
 import { CapacitorAdapter } from './adapters/capacitor'
+import { toArrayBuffer, uint8ArrayToBase64 } from './utils'
 
 export type {
   OneFSAdapter,
@@ -47,7 +48,7 @@ export type {
 }
 
 export { ok, err, PLATFORM_CAPABILITIES }
-export { FSAccessAdapter, PickerIDBAdapter, TauriAdapter, CapacitorAdapter, getTauriFileUrl }
+export { FSAccessAdapter, PickerIDBAdapter, TauriAdapter, CapacitorAdapter }
 
 /**
  * Cross-platform file system abstraction.
@@ -131,7 +132,7 @@ export class OneFS {
 
   /** Whether directory operations are supported */
   get supportsDirectories(): boolean {
-    return typeof this.adapter.openDirectory === 'function'
+    return !!this.capabilities.openDirectory
   }
 
   /** Whether file handles can be persisted and restored across sessions */
@@ -209,11 +210,11 @@ export class OneFS {
    * @param directory - Directory from openDirectory()
    * @returns Array of file and directory entries with metadata
    */
-  async readDirectory(directory: OneFSDirectory): Promise<OneFSResult<OneFSEntry[]>> {
+  async readDirectory(directory: OneFSDirectory, options?: OneFSReadDirectoryOptions): Promise<OneFSResult<OneFSEntry[]>> {
     if (!this.adapter.readDirectory) {
       return err('not_supported', `Directory operations not supported on ${this.adapter.platform}`)
     }
-    return this.adapter.readDirectory(directory)
+    return this.adapter.readDirectory(directory, options)
   }
 
   /**
@@ -234,7 +235,7 @@ export class OneFS {
 
   /**
    * Recursively scan a directory for files.
-   * Only available on Tauri platform.
+   * Available on Tauri and Capacitor platforms.
    *
    * @param directory - Directory to scan
    * @param options - Scan options (extensions filter, progress callback, abort signal)
@@ -248,16 +249,42 @@ export class OneFS {
 
   /**
    * Get an efficient streaming URL for a directory entry without loading content.
-   * Only available on Tauri platform. Use for audio/video where you don't need file in memory.
+   * Available on Tauri and Capacitor platforms. Use for audio/video where you don't need file in memory.
    *
    * @param entry - Entry from readDirectory() or scanDirectory()
    * @returns Asset URL or null if not supported/available
    */
-  async getEntryUrl(entry: OneFSEntry): Promise<string | null> {
+  async getEntryUrl(entry: OneFSEntry): Promise<OneFSResult<string>> {
     if (!this.adapter.getEntryUrl) {
-      return null
+      return err('not_supported', `getEntryUrl not supported on ${this.adapter.platform}`)
     }
-    return this.adapter.getEntryUrl(entry)
+    try {
+      const url = await this.adapter.getEntryUrl(entry)
+      if (!url) {
+        return err('not_found', 'No URL available for entry')
+      }
+      return ok(url)
+    } catch (e) {
+      return err('io_error', 'Failed to get entry URL', e)
+    }
+  }
+
+  /**
+   * Get an efficient URL for a file without re-reading content.
+   * Available on Tauri and Capacitor. Falls back to blob URL.
+   *
+   * @param file - File to get URL for
+   */
+  async getFileUrl(file: OneFSFile): Promise<OneFSResult<string>> {
+    if (!this.adapter.getFileUrl) {
+      return err('not_supported', `getFileUrl not supported on ${this.adapter.platform}`)
+    }
+    try {
+      const url = await this.adapter.getFileUrl(file)
+      return ok(url)
+    } catch (e) {
+      return err('io_error', 'Failed to get file URL', e)
+    }
   }
 
   /**
@@ -375,6 +402,10 @@ export class OneFS {
     return this.adapter.clearRecent()
   }
 
+  dispose(): void {
+    this.adapter.dispose?.()
+  }
+
   // ─────────────────────────────────────────────────────────────
   // Content conversion helpers
   // ─────────────────────────────────────────────────────────────
@@ -388,28 +419,28 @@ export class OneFS {
 
   /**
    * Read file content as parsed JSON.
-   * @throws SyntaxError if content is not valid JSON
+   * Returns an error result if content is not valid JSON.
    */
-  readAsJSON<T = unknown>(file: OneFSFile): T {
-    return JSON.parse(this.readAsText(file))
+  readAsJSON<T = unknown>(file: OneFSFile): OneFSResult<T> {
+    try {
+      return ok(JSON.parse(new TextDecoder().decode(file.content)))
+    } catch (e) {
+      return err('io_error', 'Failed to parse JSON', e)
+    }
   }
 
   /**
    * Read file content as data URL (data:mime;base64,...).
    */
   readAsDataURL(file: OneFSFile): string {
-    let binary = ''
-    for (let i = 0; i < file.content.length; i++) {
-      binary += String.fromCharCode(file.content[i])
-    }
-    return `data:${file.mimeType};base64,${btoa(binary)}`
+    return `data:${file.mimeType};base64,${uint8ArrayToBase64(file.content)}`
   }
 
   /**
    * Read file content as Blob.
    */
   readAsBlob(file: OneFSFile): Blob {
-    return new Blob([file.content.buffer as ArrayBuffer], { type: file.mimeType })
+    return new Blob([toArrayBuffer(file.content)], { type: file.mimeType })
   }
 
   /**

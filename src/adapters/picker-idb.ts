@@ -9,7 +9,7 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType } from '../utils'
+import { generateId, getMimeType, toArrayBuffer, sanitizeFileName } from '../utils'
 
 /**
  * Fallback adapter for browsers without File System Access API.
@@ -169,11 +169,11 @@ export class PickerIDBAdapter implements OneFSAdapter {
   }
 
   private triggerDownload(name: string, content: Uint8Array, mimeType: string): void {
-    const blob = new Blob([content.buffer as ArrayBuffer], { type: mimeType })
+    const blob = new Blob([toArrayBuffer(content)], { type: mimeType })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = name
+    a.download = sanitizeFileName(name)
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -212,5 +212,9 @@ export class PickerIDBAdapter implements OneFSAdapter {
 
   async clearRecent(): Promise<void> {
     await this.storage.clearFiles()
+  }
+
+  dispose(): void {
+    this.storage.dispose()
   }
 }

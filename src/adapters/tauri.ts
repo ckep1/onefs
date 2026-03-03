@@ -14,11 +14,13 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, getFileName } from '../utils'
+import { generateId, getMimeType, getFileName, sanitizeFileName, isPathWithin, toArrayBuffer } from '../utils'
 
 type TauriDialog = typeof import('@tauri-apps/plugin-dialog')
 type TauriFS = typeof import('@tauri-apps/plugin-fs')
 type TauriCore = typeof import('@tauri-apps/api/core')
+
+const DIRECTORY_MIME_TYPE = 'inode/directory'
 
 /**
  * Adapter for Tauri v2 desktop applications.
@@ -236,13 +238,12 @@ export class TauriAdapter implements OneFSAdapter {
       const id = generateId()
 
       if (shouldPersist) {
-        // Store directory info for recent list
         const storedFile: StoredFile = {
           id,
           name: getFileName(path),
           path,
-          content: new Uint8Array(0), // Empty content for directories
-          mimeType: 'inode/directory',
+          content: new Uint8Array(0),
+          mimeType: DIRECTORY_MIME_TYPE,
           size: 0,
           lastModified: Date.now(),
           storedAt: Date.now(),
@@ -282,34 +283,34 @@ export class TauriAdapter implements OneFSAdapter {
       const entries: OneFSEntry[] = []
 
       for (const entry of dirEntries) {
-        // Defensive check for entry.name
         if (!entry.name) continue
 
-        const filePath = `${directory.path}/${entry.name}`
+        const safeName = sanitizeFileName(entry.name)
+        const filePath = `${directory.path}/${safeName}`
+
+        if (!isPathWithin(filePath, directory.path)) continue
 
         if (entry.isFile) {
           if (options.skipStats) {
-            // Fast path: skip stat() call
             entries.push({
-              name: entry.name,
+              name: safeName,
               kind: 'file',
               path: filePath,
             })
           } else {
-            // Get file stats for size/lastModified
             try {
               const stat = await fs.stat(filePath)
               entries.push({
-                name: entry.name,
+                name: safeName,
                 kind: 'file',
                 size: stat.size,
                 lastModified: stat.mtime ? new Date(stat.mtime).getTime() : Date.now(),
                 path: filePath,
               })
-            } catch {
-              // If stat fails, add entry without size info
+            } catch (statError) {
+              options.onError?.(filePath, statError)
               entries.push({
-                name: entry.name,
+                name: safeName,
                 kind: 'file',
                 path: filePath,
               })
@@ -317,7 +318,7 @@ export class TauriAdapter implements OneFSAdapter {
           }
         } else if (entry.isDirectory) {
           entries.push({
-            name: entry.name,
+            name: safeName,
             kind: 'directory',
             path: filePath,
           })
@@ -342,12 +343,16 @@ export class TauriAdapter implements OneFSAdapter {
    * Note: maxBytes option is not yet implemented for Tauri (full file is always loaded).
    */
   async readFileFromDirectory(
-    _directory: OneFSDirectory,
+    directory: OneFSDirectory,
     entry: OneFSEntry,
     _options?: { maxBytes?: number }
   ): Promise<OneFSResult<OneFSFile>> {
     if (!entry.path || entry.kind !== 'file') {
       return err('not_supported', 'Cannot read file without path')
+    }
+
+    if (directory.path && !isPathWithin(entry.path, directory.path)) {
+      return err('permission_denied', 'Path is outside the expected directory')
     }
 
     try {
@@ -416,24 +421,24 @@ export class TauriAdapter implements OneFSAdapter {
           const dirEntries = await fs.readDir(currentDir)
 
           for (const entry of dirEntries) {
-            // Defensive check for entry.name
             if (!entry.name) continue
 
-            const entryPath = `${currentDir}/${entry.name}`
+            const safeName = sanitizeFileName(entry.name)
+            const entryPath = `${currentDir}/${safeName}`
+
+            if (!isPathWithin(entryPath, directory.path)) continue
 
             if (entry.isDirectory) {
-              // Queue subdirectory for later scanning
               directoriesToScan.push(entryPath)
             } else if (entry.isFile) {
-              // Check extension filter
               if (extensionSet) {
-                const ext = entry.name.split('.').pop()?.toLowerCase()
+                const ext = safeName.split('.').pop()?.toLowerCase()
                 if (!ext || !extensionSet.has(ext)) continue
               }
 
               if (skipStats) {
                 files.push({
-                  name: entry.name,
+                  name: safeName,
                   kind: 'file',
                   path: entryPath,
                 })
@@ -441,15 +446,16 @@ export class TauriAdapter implements OneFSAdapter {
                 try {
                   const stat = await fs.stat(entryPath)
                   files.push({
-                    name: entry.name,
+                    name: safeName,
                     kind: 'file',
                     size: stat.size,
                     lastModified: stat.mtime ? new Date(stat.mtime).getTime() : Date.now(),
                     path: entryPath,
                   })
-                } catch {
+                } catch (statError) {
+                  onError?.(entryPath, statError)
                   files.push({
-                    name: entry.name,
+                    name: safeName,
                     kind: 'file',
                     path: entryPath,
                   })
@@ -496,7 +502,7 @@ export class TauriAdapter implements OneFSAdapter {
       id: f.id,
       name: f.name,
       path: f.path,
-      type: f.mimeType === 'inode/directory' ? 'directory' as const : 'file' as const,
+      type: f.mimeType === DIRECTORY_MIME_TYPE ? 'directory' as const : 'file' as const,
       storedAt: f.storedAt,
     }))
   }
@@ -507,8 +513,7 @@ export class TauriAdapter implements OneFSAdapter {
       return err('not_found', 'File not found in storage')
     }
 
-    // If we have a path, try to read the current file contents
-    if (file.path && file.mimeType !== 'inode/directory') {
+    if (file.path && file.mimeType !== DIRECTORY_MIME_TYPE) {
       try {
         const { fs } = await this.loadModules()
         const content = await fs.readFile(file.path)
@@ -523,8 +528,9 @@ export class TauriAdapter implements OneFSAdapter {
           size: content.byteLength,
           lastModified: stat.mtime ? new Date(stat.mtime).getTime() : file.lastModified,
         })
-      } catch {
-        // Fall back to stored content if file no longer exists
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'File no longer accessible'
+        return err('not_found', message, e)
       }
     }
 
@@ -541,7 +547,7 @@ export class TauriAdapter implements OneFSAdapter {
 
   async restoreDirectory(stored: StoredHandle): Promise<OneFSResult<OneFSDirectory>> {
     const file = await this.storage.getStoredFile(stored.id)
-    if (!file || file.mimeType !== 'inode/directory') {
+    if (!file || file.mimeType !== DIRECTORY_MIME_TYPE) {
       return err('not_found', 'Directory not found in storage')
     }
 
@@ -579,21 +585,26 @@ export class TauriAdapter implements OneFSAdapter {
     await this.storage.clearFiles()
   }
 
+  dispose(): void {
+    this.storage.dispose()
+  }
+
   /**
    * Get an efficient URL for a file using Tauri's asset protocol.
    * This avoids loading the entire file into memory.
-   * Falls back to blob URL if convertFileSrc is not available.
+   * Falls back to a blob URL if convertFileSrc is not available.
+   * Callers must call URL.revokeObjectURL() on blob URLs when done.
    */
   async getFileUrl(file: OneFSFile): Promise<string> {
     if (!file.path) {
-      return URL.createObjectURL(new Blob([file.content.buffer as ArrayBuffer], { type: file.mimeType }))
+      return URL.createObjectURL(new Blob([toArrayBuffer(file.content)], { type: file.mimeType }))
     }
 
     try {
       const { core } = await this.loadModules()
       return core.convertFileSrc(file.path)
     } catch {
-      return URL.createObjectURL(new Blob([file.content.buffer as ArrayBuffer], { type: file.mimeType }))
+      return URL.createObjectURL(new Blob([toArrayBuffer(file.content)], { type: file.mimeType }))
     }
   }
 
@@ -612,22 +623,5 @@ export class TauriAdapter implements OneFSAdapter {
     } catch {
       return null
     }
-  }
-}
-
-/**
- * Get a Tauri asset URL for a file path.
- * Useful for audio/video playback without loading entire file into memory.
- * Returns null if not running in Tauri v2.
- */
-export async function getTauriFileUrl(filePath: string): Promise<string | null> {
-  if (typeof window === 'undefined') return null
-  if (!('__TAURI_INTERNALS__' in window)) return null
-
-  try {
-    const { convertFileSrc } = await import('@tauri-apps/api/core')
-    return convertFileSrc(filePath)
-  } catch {
-    return null
   }
 }

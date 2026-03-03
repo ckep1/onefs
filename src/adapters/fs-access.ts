@@ -5,6 +5,7 @@ import type {
   OneFSSaveOptions,
   OneFSDirectory,
   OneFSDirectoryOptions,
+  OneFSReadDirectoryOptions,
   OneFSEntry,
   StoredHandle,
   OneFSResult,
@@ -13,7 +14,7 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType } from '../utils'
+import { generateId, getMimeType, toArrayBuffer } from '../utils'
 
 function buildAcceptTypes(accept?: string[]): FilePickerAcceptType[] {
   if (!accept || accept.length === 0) return []
@@ -113,7 +114,7 @@ export class FSAccessAdapter implements OneFSAdapter {
       }
 
       const writable = await file.handle.createWritable()
-      const data = typeof content === 'string' ? content : new Blob([content.buffer as ArrayBuffer])
+      const data = typeof content === 'string' ? content : new Blob([toArrayBuffer(content)])
       await writable.write(data)
       await writable.close()
 
@@ -141,7 +142,7 @@ export class FSAccessAdapter implements OneFSAdapter {
       })
 
       const writable = await handle.createWritable()
-      const data = typeof content === 'string' ? content : new Blob([content.buffer as ArrayBuffer])
+      const data = typeof content === 'string' ? content : new Blob([toArrayBuffer(content)])
       await writable.write(data)
       await writable.close()
 
@@ -208,7 +209,7 @@ export class FSAccessAdapter implements OneFSAdapter {
    * List directory contents as entries (metadata only, no content loaded).
    * Use readFileFromDirectory() to load a specific file's content.
    */
-  async readDirectory(directory: OneFSDirectory): Promise<OneFSResult<OneFSEntry[]>> {
+  async readDirectory(directory: OneFSDirectory, options: OneFSReadDirectoryOptions = {}): Promise<OneFSResult<OneFSEntry[]>> {
     if (!directory.handle) {
       return err('not_supported', 'Cannot read directory without handle')
     }
@@ -218,14 +219,31 @@ export class FSAccessAdapter implements OneFSAdapter {
 
       for await (const entry of directory.handle.values()) {
         if (entry.kind === 'file') {
-          const file = await entry.getFile()
-          entries.push({
-            name: entry.name,
-            kind: 'file',
-            size: file.size,
-            lastModified: file.lastModified,
-            handle: entry,
-          })
+          if (options.skipStats) {
+            entries.push({
+              name: entry.name,
+              kind: 'file',
+              handle: entry,
+            })
+          } else {
+            try {
+              const file = await entry.getFile()
+              entries.push({
+                name: entry.name,
+                kind: 'file',
+                size: file.size,
+                lastModified: file.lastModified,
+                handle: entry,
+              })
+            } catch (entryError) {
+              options.onError?.(entry.name, entryError)
+              entries.push({
+                name: entry.name,
+                kind: 'file',
+                handle: entry,
+              })
+            }
+          }
         } else {
           entries.push({
             name: entry.name,
@@ -450,5 +468,9 @@ export class FSAccessAdapter implements OneFSAdapter {
 
   async clearRecent(): Promise<void> {
     await this.storage.clearHandles()
+  }
+
+  dispose(): void {
+    this.storage.dispose()
   }
 }

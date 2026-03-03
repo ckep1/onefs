@@ -109,6 +109,8 @@ export interface OneFSDirectoryOptions {
 export interface OneFSReadDirectoryOptions {
   /** Skip stat() calls for faster scanning (size/lastModified will be undefined) */
   skipStats?: boolean
+  /** Callback for errors encountered while reading entries (e.g. stat failures) */
+  onError?: (path: string, error: unknown) => void
 }
 
 export interface OneFSScanOptions extends OneFSReadDirectoryOptions {
@@ -116,8 +118,6 @@ export interface OneFSScanOptions extends OneFSReadDirectoryOptions {
   extensions?: string[]
   /** Callback for progress updates during recursive scan */
   onProgress?: (scanned: number, found: number) => void
-  /** Callback for errors encountered while scanning subdirectories (silent by default) */
-  onError?: (path: string, error: unknown) => void
   /** AbortSignal for cancellation support */
   signal?: AbortSignal
 }
@@ -229,10 +229,10 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     openFile: true,
     saveFile: true,
     saveFileAs: true,
-    openDirectory: true,
-    readDirectory: true,
+    openDirectory: 'limited',
+    readDirectory: 'limited',
     handlePersistence: false,
-    canSaveInPlace: true,
+    canSaveInPlace: false,
     permissions: false,
   },
 }
@@ -302,6 +302,9 @@ export interface OneFSAdapter {
 
   /** Remove a named directory (optional - check capabilities.handlePersistence) */
   removeNamedDirectory?(key: string): Promise<void>
+
+  /** Close underlying storage connections */
+  dispose?(): void
 }
 
 export interface OneFSConfig {

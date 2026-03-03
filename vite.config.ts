@@ -19,7 +19,10 @@ export default defineConfig({
       external: [
         '@tauri-apps/plugin-dialog',
         '@tauri-apps/plugin-fs',
+        '@tauri-apps/api/core',
         '@capacitor/filesystem',
+        '@capacitor/core',
+        '@capawesome/capacitor-file-picker',
       ],
     },
     sourcemap: true,

@@ -1,5 +1,5 @@
 export function generateId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+  return crypto.randomUUID()
 }
 
 const MIME_TYPES: Record<string, string> = {
@@ -52,13 +52,15 @@ export function getMimeType(name: string): string {
 }
 
 export function getFileName(path: string): string {
-  return path.split('/').pop() ?? path.split('\\').pop() ?? path
+  return path.split(/[/\\]/).pop() || path
 }
 
 export function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const CHUNK = 8192
   let binary = ''
-  for (let i = 0; i < bytes.length; i++) {
-    binary += String.fromCharCode(bytes[i])
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length))
+    binary += String.fromCharCode.apply(null, slice as unknown as number[])
   }
   return btoa(binary)
 }
@@ -70,4 +72,33 @@ export function base64ToUint8Array(base64: string): Uint8Array {
     bytes[i] = binary.charCodeAt(i)
   }
   return bytes
+}
+
+export function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+}
+
+export function normalizePath(path: string): string {
+  const segments = path.replace(/\\/g, '/').split('/')
+  const result: string[] = []
+  for (const seg of segments) {
+    if (seg === '..') {
+      result.pop()
+    } else if (seg && seg !== '.') {
+      result.push(seg)
+    }
+  }
+  const normalized = result.join('/')
+  return path.startsWith('/') ? '/' + normalized : normalized
+}
+
+export function isPathWithin(child: string, parent: string): boolean {
+  const normalChild = normalizePath(child)
+  const normalParent = normalizePath(parent)
+  const prefix = normalParent.endsWith('/') ? normalParent : normalParent + '/'
+  return normalChild === normalParent || normalChild.startsWith(prefix)
+}
+
+export function sanitizeFileName(name: string): string {
+  return name.replace(/[/\\\0]/g, '').replace(/\.\./g, '')
 }

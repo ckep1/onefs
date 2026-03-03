@@ -10,10 +10,15 @@ export class IDBStorage {
   private dbName: string
   private db: IDBDatabase | null = null
   private maxRecentFiles: number
+  private maxCacheSize: number
 
-  constructor(appName: string, maxRecentFiles = 10) {
+  constructor(appName: string, maxRecentFiles = 10, maxCacheSize = 50 * 1024 * 1024) {
+    if (!appName || !/^[\w.\-]+$/.test(appName)) {
+      throw new Error(`Invalid appName: must be non-empty and contain only alphanumeric, hyphens, underscores, or dots`)
+    }
     this.dbName = `onefs-${appName}`
     this.maxRecentFiles = maxRecentFiles
+    this.maxCacheSize = maxCacheSize
   }
 
   private async getDB(): Promise<IDBDatabase> {
@@ -80,8 +85,8 @@ export class IDBStorage {
       handleStore.put(storedHandle)
       objectStore.put({ id, handle })
 
-      tx.oncomplete = async () => {
-        await this.pruneOldHandles()
+      tx.oncomplete = () => {
+        this.pruneOldHandles().catch(() => {})
         resolve(storedHandle)
       }
     })
@@ -179,6 +184,8 @@ export class IDBStorage {
    * Automatically prunes old files to stay within maxRecentFiles limit.
    */
   async storeFile(file: StoredFile): Promise<void> {
+    if (file.content.byteLength > this.maxCacheSize) return
+
     const db = await this.getDB()
 
     return new Promise((resolve, reject) => {
@@ -188,8 +195,8 @@ export class IDBStorage {
       const store = tx.objectStore('files')
       store.put(file)
 
-      tx.oncomplete = async () => {
-        await this.pruneOldFiles()
+      tx.oncomplete = () => {
+        this.pruneOldFiles().catch(() => {})
         resolve()
       }
     })
@@ -346,5 +353,12 @@ export class IDBStorage {
 
       tx.oncomplete = () => resolve()
     })
+  }
+
+  dispose(): void {
+    if (this.db) {
+      this.db.close()
+      this.db = null
+    }
   }
 }

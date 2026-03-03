@@ -13,10 +13,12 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, base64ToUint8Array, uint8ArrayToBase64 } from '../utils'
+import { generateId, getMimeType, base64ToUint8Array, uint8ArrayToBase64, toArrayBuffer, sanitizeFileName, isPathWithin } from '../utils'
 
 type CapacitorFilesystem = typeof import('@capacitor/filesystem')
 type CapacitorCore = typeof import('@capacitor/core')
+
+const DIRECTORY_MIME_TYPE = 'inode/directory'
 
 interface FilePickerResult {
   files: Array<{
@@ -108,18 +110,9 @@ export class CapacitorAdapter implements OneFSAdapter {
       const { FilePicker } = module
       const { Filesystem, Directory } = await this.loadFilesystem()
 
-      const types = options.accept?.map(ext => {
-        const mimeMap: Record<string, string> = {
-          '.mp3': 'audio/mpeg',
-          '.flac': 'audio/flac',
-          '.wav': 'audio/wav',
-          '.m4a': 'audio/mp4',
-          '.aac': 'audio/aac',
-          '.ogg': 'audio/ogg',
-          '.opus': 'audio/opus',
-        }
-        return mimeMap[ext] || 'audio/*'
-      }) ?? ['audio/*']
+      const types = options.accept
+        ? [...new Set(options.accept.map(ext => getMimeType(ext)))]
+        : ['*/*']
 
       const result = await FilePicker.pickFiles({
         types,
@@ -130,8 +123,8 @@ export class CapacitorAdapter implements OneFSAdapter {
       const files: OneFSFile[] = []
 
       for (const picked of result.files) {
-        // Copy file to Documents for persistent access
-        const destName = `${generateId()}_${picked.name}`
+        const safeName = sanitizeFileName(picked.name)
+        const destName = `${generateId()}_${safeName}`
         const destPath = destName
 
         // Read and copy to Documents
@@ -167,7 +160,7 @@ export class CapacitorAdapter implements OneFSAdapter {
     options: OneFSOpenOptions,
     shouldPersist: boolean
   ): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
-    const accept = options.accept?.join(',') ?? 'audio/*'
+    const accept = options.accept?.join(',') ?? '*/*'
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = accept
@@ -189,7 +182,8 @@ export class CapacitorAdapter implements OneFSAdapter {
             const file = fileList[i]
             const content = new Uint8Array(await file.arrayBuffer())
             const id = generateId()
-            const destPath = `${id}_${file.name}`
+            const safeName = sanitizeFileName(file.name)
+            const destPath = `${id}_${safeName}`
 
             // Copy to Documents for persistent access
             await Filesystem.writeFile({
@@ -251,7 +245,7 @@ export class CapacitorAdapter implements OneFSAdapter {
       const { Filesystem, Directory } = await this.loadFilesystem()
 
       const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
-      const fileName = file.path ?? `${file.id}_${file.name}`
+      const fileName = file.path ?? `${file.id}_${sanitizeFileName(file.name)}`
 
       await Filesystem.writeFile({
         path: fileName,
@@ -291,7 +285,7 @@ export class CapacitorAdapter implements OneFSAdapter {
       const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
       const name = options.suggestedName ?? 'untitled'
       const id = generateId()
-      const fileName = `${id}_${name}`
+      const fileName = `${id}_${sanitizeFileName(name)}`
 
       await Filesystem.writeFile({
         path: fileName,
@@ -371,24 +365,25 @@ export class CapacitorAdapter implements OneFSAdapter {
       const entries: OneFSEntry[] = []
 
       for (const entry of result.files) {
-        const filePath = directory.path ? `${directory.path}/${entry.name}` : entry.name
+        const safeName = sanitizeFileName(entry.name)
+        const filePath = directory.path ? `${directory.path}/${safeName}` : safeName
 
         if (entry.type === 'directory') {
           entries.push({
-            name: entry.name,
+            name: safeName,
             kind: 'directory',
             path: filePath,
           })
         } else {
           if (options.skipStats) {
             entries.push({
-              name: entry.name,
+              name: safeName,
               kind: 'file',
               path: filePath,
             })
           } else {
             entries.push({
-              name: entry.name,
+              name: safeName,
               kind: 'file',
               size: entry.size,
               lastModified: entry.mtime ?? Date.now(),
@@ -443,14 +438,14 @@ export class CapacitorAdapter implements OneFSAdapter {
           })
 
           for (const entry of result.files) {
-            const entryPath = currentDir ? `${currentDir}/${entry.name}` : entry.name
+            const safeName = sanitizeFileName(entry.name)
+            const entryPath = currentDir ? `${currentDir}/${safeName}` : safeName
 
             if (entry.type === 'directory') {
               directoriesToScan.push(entryPath)
             } else {
-              // Check extension filter
               if (extensionSet) {
-                const ext = entry.name.split('.').pop()?.toLowerCase()
+                const ext = safeName.split('.').pop()?.toLowerCase()
                 if (!ext || !extensionSet.has(ext)) {
                   continue
                 }
@@ -458,13 +453,13 @@ export class CapacitorAdapter implements OneFSAdapter {
 
               if (skipStats) {
                 files.push({
-                  name: entry.name,
+                  name: safeName,
                   kind: 'file',
                   path: entryPath,
                 })
               } else {
                 files.push({
-                  name: entry.name,
+                  name: safeName,
                   kind: 'file',
                   size: entry.size,
                   lastModified: entry.mtime ?? Date.now(),
@@ -509,7 +504,7 @@ export class CapacitorAdapter implements OneFSAdapter {
    * Supports partial reads via maxBytes option to reduce memory usage for large files.
    */
   async readFileFromDirectory(
-    _directory: OneFSDirectory,
+    directory: OneFSDirectory,
     entry: OneFSEntry,
     options?: { maxBytes?: number }
   ): Promise<OneFSResult<OneFSFile>> {
@@ -517,39 +512,38 @@ export class CapacitorAdapter implements OneFSAdapter {
       return err('not_supported', 'Cannot read file without path')
     }
 
+    if (directory.path !== undefined && !isPathWithin(entry.path, directory.path)) {
+      return err('permission_denied', 'Path is outside the expected directory')
+    }
+
     try {
       const { Filesystem, Directory } = await this.loadFilesystem()
       const { Capacitor } = await this.loadCore()
 
-      // For partial reads on large files, use fetch with Range header
       if (options?.maxBytes && entry.size && entry.size > options.maxBytes) {
-        try {
-          const uri = await Filesystem.getUri({
+        const uri = await Filesystem.getUri({
+          path: entry.path,
+          directory: Directory.Documents,
+        })
+        const nativeUrl = Capacitor.convertFileSrc(uri.uri)
+
+        const response = await fetch(nativeUrl, {
+          headers: { Range: `bytes=0-${options.maxBytes - 1}` }
+        })
+
+        if (response.ok || response.status === 206) {
+          const arrayBuffer = await response.arrayBuffer()
+          const content = new Uint8Array(arrayBuffer)
+
+          return ok({
+            id: generateId(),
+            name: entry.name,
             path: entry.path,
-            directory: Directory.Documents,
+            content,
+            mimeType: getMimeType(entry.name),
+            size: content.byteLength,
+            lastModified: entry.lastModified ?? Date.now(),
           })
-          const nativeUrl = Capacitor.convertFileSrc(uri.uri)
-
-          const response = await fetch(nativeUrl, {
-            headers: { Range: `bytes=0-${options.maxBytes - 1}` }
-          })
-
-          if (response.ok || response.status === 206) {
-            const arrayBuffer = await response.arrayBuffer()
-            const content = new Uint8Array(arrayBuffer)
-
-            return ok({
-              id: generateId(),
-              name: entry.name,
-              path: entry.path,
-              content,
-              mimeType: getMimeType(entry.name),
-              size: content.byteLength,
-              lastModified: entry.lastModified ?? Date.now(),
-            })
-          }
-        } catch (partialError) {
-          // Fallback to full read
         }
       }
 
@@ -590,10 +584,12 @@ export class CapacitorAdapter implements OneFSAdapter {
   /**
    * Get an efficient URL for a file using Capacitor's convertFileSrc.
    * This avoids loading the entire file into memory.
+   * Falls back to a blob URL if convertFileSrc fails.
+   * Callers must call URL.revokeObjectURL() on blob URLs when done.
    */
   async getFileUrl(file: OneFSFile): Promise<string> {
     if (!file.path) {
-      return URL.createObjectURL(new Blob([file.content.buffer as ArrayBuffer], { type: file.mimeType }))
+      return URL.createObjectURL(new Blob([toArrayBuffer(file.content)], { type: file.mimeType }))
     }
 
     try {
@@ -607,7 +603,7 @@ export class CapacitorAdapter implements OneFSAdapter {
 
       return Capacitor.convertFileSrc(result.uri)
     } catch {
-      return URL.createObjectURL(new Blob([file.content.buffer as ArrayBuffer], { type: file.mimeType }))
+      return URL.createObjectURL(new Blob([toArrayBuffer(file.content)], { type: file.mimeType }))
     }
   }
 
@@ -641,13 +637,12 @@ export class CapacitorAdapter implements OneFSAdapter {
       id: f.id,
       name: f.name,
       path: f.path,
-      type: f.mimeType === 'inode/directory' ? 'directory' as const : 'file' as const,
+      type: f.mimeType === DIRECTORY_MIME_TYPE ? 'directory' as const : 'file' as const,
       storedAt: f.storedAt,
     }))
   }
 
   async restoreFile(stored: StoredHandle): Promise<OneFSResult<OneFSFile>> {
-    // Try to read fresh from disk first
     if (stored.path) {
       try {
         const { Filesystem, Directory } = await this.loadFilesystem()
@@ -678,12 +673,12 @@ export class CapacitorAdapter implements OneFSAdapter {
           size: content.byteLength,
           lastModified: stat.mtime ?? Date.now(),
         })
-      } catch {
-        // File may have been deleted, fall back to storage
+      } catch (e) {
+        const message = e instanceof Error ? e.message : 'File no longer accessible'
+        return err('not_found', message, e)
       }
     }
 
-    // Fall back to stored content
     const file = await this.storage.getStoredFile(stored.id)
     if (!file) {
       return err('not_found', 'File not found in storage')
@@ -731,5 +726,9 @@ export class CapacitorAdapter implements OneFSAdapter {
 
   async clearRecent(): Promise<void> {
     await this.storage.clearFiles()
+  }
+
+  dispose(): void {
+    this.storage.dispose()
   }
 }
