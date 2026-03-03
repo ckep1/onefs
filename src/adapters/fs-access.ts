@@ -14,7 +14,7 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, toArrayBuffer } from '../utils'
+import { generateId, getMimeType, sanitizeFileName, toArrayBuffer } from '../utils'
 
 function buildAcceptTypes(accept?: string[]): FilePickerAcceptType[] {
   if (!accept || accept.length === 0) return []
@@ -460,6 +460,73 @@ export class FSAccessAdapter implements OneFSAdapter {
 
   async removeNamedDirectory(key: string): Promise<void> {
     await this.storage.removeNamedHandle(key)
+  }
+
+  async deleteFile(file: OneFSFile): Promise<OneFSResult<boolean>> {
+    if (!file.handle) {
+      return err('not_supported', 'Cannot delete file without handle')
+    }
+
+    try {
+      const permission = await file.handle.queryPermission({ mode: 'readwrite' })
+      if (permission !== 'granted') {
+        const requested = await file.handle.requestPermission({ mode: 'readwrite' })
+        if (requested !== 'granted') {
+          return err('permission_denied', 'Write permission denied')
+        }
+      }
+
+      await file.handle.remove()
+      await this.storage.removeHandle(file.id)
+      return ok(true)
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'NotFoundError') {
+        return err('not_found', 'File not found', e)
+      }
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to delete file', e)
+      }
+      return err('io_error', error.message || 'Failed to delete file', e)
+    }
+  }
+
+  async renameFile(file: OneFSFile, newName: string): Promise<OneFSResult<OneFSFile>> {
+    if (!file.handle) {
+      return err('not_supported', 'Cannot rename file without handle')
+    }
+
+    const sanitized = sanitizeFileName(newName)
+    if (!sanitized) {
+      return err('io_error', 'Invalid file name')
+    }
+
+    try {
+      const permission = await file.handle.queryPermission({ mode: 'readwrite' })
+      if (permission !== 'granted') {
+        const requested = await file.handle.requestPermission({ mode: 'readwrite' })
+        if (requested !== 'granted') {
+          return err('permission_denied', 'Write permission denied')
+        }
+      }
+
+      await file.handle.move(sanitized)
+      const updatedFile: OneFSFile = {
+        ...file,
+        name: sanitized,
+        mimeType: getMimeType(sanitized),
+      }
+      return ok(updatedFile)
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'NotFoundError') {
+        return err('not_found', 'File not found', e)
+      }
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to rename file', e)
+      }
+      return err('io_error', error.message || 'Failed to rename file', e)
+    }
   }
 
   async removeFromRecent(id: string): Promise<void> {

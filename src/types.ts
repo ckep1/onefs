@@ -192,6 +192,10 @@ export interface OneFSCapabilities {
   canSaveInPlace: boolean
   /** Can check and request permissions on files/directories (web-fs-access only) */
   permissions: boolean
+  /** Can delete files (web-fs-access, Tauri, Capacitor) */
+  deleteFile: boolean
+  /** Can rename files (web-fs-access, Tauri, Capacitor) */
+  renameFile: boolean
 }
 
 export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
@@ -204,6 +208,8 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     handlePersistence: true,
     canSaveInPlace: true,
     permissions: true,
+    deleteFile: true,
+    renameFile: true,
   },
   'web-fallback': {
     openFile: true,
@@ -214,6 +220,8 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     handlePersistence: false,
     canSaveInPlace: false,
     permissions: false,
+    deleteFile: false,
+    renameFile: false,
   },
   tauri: {
     openFile: true,
@@ -224,6 +232,8 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     handlePersistence: false,
     canSaveInPlace: true,
     permissions: false,
+    deleteFile: true,
+    renameFile: true,
   },
   capacitor: {
     openFile: true,
@@ -234,6 +244,8 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     handlePersistence: false,
     canSaveInPlace: false,
     permissions: false,
+    deleteFile: true,
+    renameFile: true,
   },
 }
 
@@ -281,6 +293,12 @@ export interface OneFSAdapter {
 
   /** Restore a previously opened directory from storage (optional - check capabilities) */
   restoreDirectory?(stored: StoredHandle, mode?: PermissionMode): Promise<OneFSResult<OneFSDirectory>>
+
+  /** Delete a file from disk and IDB storage (Tauri/Capacitor only) */
+  deleteFile?(file: OneFSFile): Promise<OneFSResult<boolean>>
+
+  /** Rename a file on disk and update IDB storage (Tauri/Capacitor only) */
+  renameFile?(file: OneFSFile, newName: string): Promise<OneFSResult<OneFSFile>>
 
   /** Remove a file from recent list */
   removeFromRecent(id: string): Promise<void>

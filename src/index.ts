@@ -389,6 +389,39 @@ export class OneFS {
   }
 
   /**
+   * Delete a file and remove it from storage.
+   * Available on web-fs-access, Tauri, and Capacitor platforms.
+   */
+  async deleteFile(file: OneFSFile): Promise<OneFSResult<boolean>> {
+    if (!this.adapter.deleteFile) {
+      return err('not_supported', `deleteFile not supported on ${this.adapter.platform}`)
+    }
+    try {
+      return await this.adapter.deleteFile(file)
+    } catch (e) {
+      return err('io_error', 'Failed to delete file', e)
+    }
+  }
+
+  /**
+   * Rename a file and update storage.
+   * Available on web-fs-access, Tauri, and Capacitor platforms.
+   */
+  async renameFile(file: OneFSFile, newName: string): Promise<OneFSResult<OneFSFile>> {
+    if (!this.adapter.renameFile) {
+      return err('not_supported', `renameFile not supported on ${this.adapter.platform}`)
+    }
+    if (!newName || typeof newName !== 'string') {
+      return err('io_error', 'New name must be a non-empty string')
+    }
+    try {
+      return await this.adapter.renameFile(file, newName)
+    } catch (e) {
+      return err('io_error', 'Failed to rename file', e)
+    }
+  }
+
+  /**
    * Remove a file from the recent files list.
    */
   async removeFromRecent(id: string): Promise<void> {

@@ -720,6 +720,79 @@ export class CapacitorAdapter implements OneFSAdapter {
     }
   }
 
+  async deleteFile(file: OneFSFile): Promise<OneFSResult<boolean>> {
+    const path = file.path ?? `${file.id}_${sanitizeFileName(file.name)}`
+
+    try {
+      const { Filesystem, Directory } = await this.loadFilesystem()
+      await Filesystem.deleteFile({
+        path,
+        directory: Directory.Documents,
+      })
+      await this.storage.removeFile(file.id)
+      return ok(true)
+    } catch (e) {
+      const error = e as Error
+      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+        return err('not_found', 'File not found', e)
+      }
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to delete file', e)
+      }
+      return err('io_error', error.message || 'Failed to delete file', e)
+    }
+  }
+
+  async renameFile(file: OneFSFile, newName: string): Promise<OneFSResult<OneFSFile>> {
+    const sanitized = sanitizeFileName(newName)
+    if (!sanitized) {
+      return err('io_error', 'Invalid file name')
+    }
+
+    const oldPath = file.path ?? `${file.id}_${sanitizeFileName(file.name)}`
+    const parentDir = oldPath.includes('/') ? oldPath.substring(0, oldPath.lastIndexOf('/')) : ''
+    const newPath = parentDir ? `${parentDir}/${sanitized}` : sanitized
+
+    try {
+      const { Filesystem, Directory } = await this.loadFilesystem()
+      await Filesystem.rename({
+        from: oldPath,
+        to: newPath,
+        directory: Directory.Documents,
+        toDirectory: Directory.Documents,
+      })
+
+      const updatedFile: OneFSFile = {
+        ...file,
+        name: sanitized,
+        path: newPath,
+        mimeType: getMimeType(sanitized),
+      }
+
+      await this.storage.storeFile({
+        id: updatedFile.id,
+        name: updatedFile.name,
+        path: updatedFile.path,
+        content: updatedFile.content,
+        mimeType: updatedFile.mimeType,
+        size: updatedFile.size,
+        lastModified: updatedFile.lastModified,
+        storedAt: Date.now(),
+      })
+
+      return ok(updatedFile)
+    } catch (e) {
+      const error = e as Error
+      if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
+        return err('not_found', 'File not found', e)
+      }
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to rename file', e)
+      }
+      return err('io_error', error.message || 'Failed to rename file', e)
+    }
+  }
+
   async removeFromRecent(id: string): Promise<void> {
     await this.storage.removeFile(id)
   }

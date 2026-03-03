@@ -577,6 +577,86 @@ export class TauriAdapter implements OneFSAdapter {
     }
   }
 
+  async deleteFile(file: OneFSFile): Promise<OneFSResult<boolean>> {
+    if (!file.path) {
+      return err('not_supported', 'Cannot delete file without path')
+    }
+
+    const stored = await this.storage.getStoredFile(file.id)
+    if (!stored || stored.path !== file.path) {
+      return err('permission_denied', 'File was not opened through this adapter')
+    }
+
+    try {
+      const { fs } = await this.loadModules()
+      await fs.remove(file.path)
+      await this.storage.removeFile(file.id)
+      return ok(true)
+    } catch (e) {
+      const error = e as Error
+      if (error.message?.includes('No such file') || error.message?.includes('not found')) {
+        return err('not_found', 'File not found', e)
+      }
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to delete file', e)
+      }
+      return err('io_error', error.message || 'Failed to delete file', e)
+    }
+  }
+
+  async renameFile(file: OneFSFile, newName: string): Promise<OneFSResult<OneFSFile>> {
+    if (!file.path) {
+      return err('not_supported', 'Cannot rename file without path')
+    }
+
+    const sanitized = sanitizeFileName(newName)
+    if (!sanitized) {
+      return err('io_error', 'Invalid file name')
+    }
+
+    const stored = await this.storage.getStoredFile(file.id)
+    if (!stored || stored.path !== file.path) {
+      return err('permission_denied', 'File was not opened through this adapter')
+    }
+
+    try {
+      const { fs } = await this.loadModules()
+      const parentDir = file.path.substring(0, file.path.lastIndexOf('/'))
+      const newPath = parentDir ? `${parentDir}/${sanitized}` : sanitized
+
+      await fs.rename(file.path, newPath)
+
+      const updatedFile: OneFSFile = {
+        ...file,
+        name: sanitized,
+        path: newPath,
+        mimeType: getMimeType(sanitized),
+      }
+
+      await this.storage.storeFile({
+        id: updatedFile.id,
+        name: updatedFile.name,
+        path: updatedFile.path,
+        content: updatedFile.content,
+        mimeType: updatedFile.mimeType,
+        size: updatedFile.size,
+        lastModified: updatedFile.lastModified,
+        storedAt: Date.now(),
+      })
+
+      return ok(updatedFile)
+    } catch (e) {
+      const error = e as Error
+      if (error.message?.includes('No such file') || error.message?.includes('not found')) {
+        return err('not_found', 'File not found', e)
+      }
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to rename file', e)
+      }
+      return err('io_error', error.message || 'Failed to rename file', e)
+    }
+  }
+
   async removeFromRecent(id: string): Promise<void> {
     await this.storage.removeFile(id)
   }

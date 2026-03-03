@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.1] - 2026-03-03
+
+### Added
+
+- `deleteFile(file)` — delete files on web-fs-access, Tauri, and Capacitor
+- `renameFile(file, newName)` — rename files on web-fs-access, Tauri, and Capacitor
+- `deleteFile` and `renameFile` capability flags in `OneFSCapabilities`
+- `FileSystemFileHandle.remove()` and `.move()` type declarations for web-fs-access
+- `FileSystemDirectoryHandle.removeEntry()` type declaration
+- 87 unit tests covering utilities, IDB storage, adapter selection, and facade methods
+
+### Security
+
+- Tauri `deleteFile`/`renameFile` now verify the file was opened through the adapter (IDB lookup) before allowing destructive operations
+- Web-fs-access `deleteFile`/`renameFile` request `readwrite` permission before operating, matching the `saveFile` pattern
+
 ## [0.6.0] - 2026-03-03
 
 ### Security Hardening
