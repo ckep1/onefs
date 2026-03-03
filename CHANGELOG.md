@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-03-03
+
+### Security Hardening
+
+- Add path sanitization and validation across all adapters (`sanitizeFileName`, `isPathWithin`, `normalizePath`) to defend against path traversal when consuming code passes untrusted data into file/entry objects
+- Validate `appName` in IDB storage — reject empty strings and special characters
+- Add `maxCacheSize` (default 50MB) to IDB storage to cap cached file content
+- Replace `generateId()` with `crypto.randomUUID()`
+- Make `getTauriFileUrl()` internal — was unnecessarily exported as a public API
+- Sanitize download filenames in picker-idb adapter
+- Strip null bytes in filename sanitization
+
+### Breaking Changes
+
+- `readAsJSON()` now returns `OneFSResult<T>` instead of throwing `SyntaxError`
+- `getEntryUrl()` now returns `Promise<OneFSResult<string>>` instead of `Promise<string | null>`
+
+### Added
+
+- `getFileUrl()` exposed on `OneFS` facade with `OneFSResult<string>` return type
+- `dispose()` method on `OneFS`, all adapters, and `IDBStorage` for connection cleanup
+- `onError` callback in `OneFSReadDirectoryOptions` for stat error reporting
+- `normalizePath`, `isPathWithin`, `sanitizeFileName`, `toArrayBuffer` utility exports
+- FSAccessAdapter `readDirectory` now honors `skipStats` and `onError` options
+
+### Fixed
+
+- `readDirectory` options (`skipStats`, `onError`) now forwarded from facade to adapters
+- Capacitor picker default changed from `'audio/*'` to `'*/*'` — was leftover from an audio app
+- Capacitor capabilities corrected: `canSaveInPlace` → `false`, `openDirectory`/`readDirectory` → `'limited'`
+- `getFileName()` now handles Windows-style backslash paths
+- `content.buffer as ArrayBuffer` replaced with `toArrayBuffer()` that correctly handles `byteOffset` for `Uint8Array` views
+- `uint8ArrayToBase64` rewritten with chunked processing to avoid stack overflow on large files
+- Stale IDB cache on restore now returns errors instead of silently serving cached content
+- IDB pruning race condition — fire-and-forget with proper error suppression
+- JSDoc corrected: `scanDirectory` and `getEntryUrl` available on Tauri and Capacitor
+- `supportsDirectories` getter delegates to `capabilities.openDirectory`
+- Deduplicated `onError` in `OneFSScanOptions` (inherits from `OneFSReadDirectoryOptions`)
+- Added missing Vite externals for all 6 peer dependencies
+
 ## [0.5.0] - 2025-12-13
 
 ### Added
