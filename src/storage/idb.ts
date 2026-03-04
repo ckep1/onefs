@@ -1,11 +1,8 @@
 import type { StoredHandle, StoredFile } from '../types'
 
 const DB_VERSION = 2
+const PRUNE_BUFFER = 5
 
-/**
- * IndexedDB storage manager for file handles and content.
- * Handles persistence of File System Access API handles and file content fallback.
- */
 export class IDBStorage {
   private dbName: string
   private db: IDBDatabase | null = null
@@ -57,10 +54,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Store a File System Access API handle for later restoration.
-   * Also stores metadata for listing recent files.
-   */
   async storeHandle(
     handle: FileSystemFileHandle | FileSystemDirectoryHandle,
     id: string,
@@ -92,9 +85,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Get all stored handle metadata, sorted by most recent first.
-   */
   async getStoredHandles(): Promise<StoredHandle[]> {
     const db = await this.getDB()
 
@@ -112,10 +102,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Get the actual FileSystemHandle object by ID.
-   * Returns null if not found (e.g., on non-FSA platforms).
-   */
   async getHandleObject(id: string): Promise<FileSystemFileHandle | FileSystemDirectoryHandle | null> {
     const db = await this.getDB()
 
@@ -132,9 +118,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Remove a handle and its metadata from storage.
-   */
   async removeHandle(id: string): Promise<void> {
     const db = await this.getDB()
 
@@ -149,9 +132,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Clear all stored handles.
-   */
   async clearHandles(): Promise<void> {
     const db = await this.getDB()
 
@@ -166,23 +146,25 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Remove oldest handles if count exceeds maxRecentFiles.
-   */
   private async pruneOldHandles(): Promise<void> {
     const handles = await this.getStoredHandles()
-    if (handles.length <= this.maxRecentFiles) return
+    if (handles.length <= this.maxRecentFiles + PRUNE_BUFFER) return
 
     const toRemove = handles.slice(this.maxRecentFiles)
+    const db = await this.getDB()
+    const tx = db.transaction(['handles', 'handleObjects'], 'readwrite')
+    const handleStore = tx.objectStore('handles')
+    const objectStore = tx.objectStore('handleObjects')
     for (const handle of toRemove) {
-      await this.removeHandle(handle.id)
+      handleStore.delete(handle.id)
+      objectStore.delete(handle.id)
     }
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
   }
 
-  /**
-   * Store file content in IndexedDB (for fallback/Tauri/Capacitor platforms).
-   * Automatically prunes old files to stay within maxRecentFiles limit.
-   */
   async storeFile(file: StoredFile): Promise<void> {
     if (file.content.byteLength > this.maxCacheSize) return
 
@@ -202,9 +184,12 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Get a stored file by ID.
-   */
+  storeFileDeferred(file: StoredFile): void {
+    queueMicrotask(() => {
+      this.storeFile(file).catch(() => {})
+    })
+  }
+
   async getStoredFile(id: string): Promise<StoredFile | null> {
     const db = await this.getDB()
 
@@ -218,9 +203,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Remove a file from storage.
-   */
   async removeFile(id: string): Promise<void> {
     const db = await this.getDB()
 
@@ -234,9 +216,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Get all stored files, sorted by most recent first.
-   */
   async getStoredFiles(): Promise<StoredFile[]> {
     const db = await this.getDB()
 
@@ -254,9 +233,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Clear all stored files.
-   */
   async clearFiles(): Promise<void> {
     const db = await this.getDB()
 
@@ -270,23 +246,23 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Remove oldest files if count exceeds maxRecentFiles.
-   */
   private async pruneOldFiles(): Promise<void> {
     const files = await this.getStoredFiles()
-    if (files.length <= this.maxRecentFiles) return
+    if (files.length <= this.maxRecentFiles + PRUNE_BUFFER) return
 
     const toRemove = files.slice(this.maxRecentFiles)
+    const db = await this.getDB()
+    const tx = db.transaction('files', 'readwrite')
+    const store = tx.objectStore('files')
     for (const file of toRemove) {
-      await this.removeFile(file.id)
+      store.delete(file.id)
     }
+    await new Promise<void>((resolve, reject) => {
+      tx.oncomplete = () => resolve()
+      tx.onerror = () => reject(tx.error)
+    })
   }
 
-  /**
-   * Store a handle by a named key (separate from recent files).
-   * Useful for app preferences like "output directory".
-   */
   async setNamedHandle(
     key: string,
     handle: FileSystemFileHandle | FileSystemDirectoryHandle
@@ -309,9 +285,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Get a named handle by key.
-   */
   async getNamedHandle(key: string): Promise<{
     handle: FileSystemFileHandle | FileSystemDirectoryHandle
     name: string
@@ -339,9 +312,6 @@ export class IDBStorage {
     })
   }
 
-  /**
-   * Remove a named handle.
-   */
   async removeNamedHandle(key: string): Promise<void> {
     const db = await this.getDB()
 

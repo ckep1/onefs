@@ -21,11 +21,8 @@ type TauriFS = typeof import('@tauri-apps/plugin-fs')
 type TauriCore = typeof import('@tauri-apps/api/core')
 
 const DIRECTORY_MIME_TYPE = 'inode/directory'
+const STAT_CHUNK_SIZE = 25
 
-/**
- * Adapter for Tauri v2 desktop applications.
- * Provides full filesystem access via native dialogs.
- */
 export class TauriAdapter implements OneFSAdapter {
   platform = 'tauri' as const
   private storage: IDBStorage
@@ -33,6 +30,7 @@ export class TauriAdapter implements OneFSAdapter {
   private fs: TauriFS | null = null
   private core: TauriCore | null = null
   private persistByDefault: boolean
+  private scanLock: Promise<void> = Promise.resolve()
 
   constructor(appName: string, maxRecentFiles = 10, persistByDefault = true) {
     this.storage = new IDBStorage(appName, maxRecentFiles)
@@ -58,6 +56,15 @@ export class TauriAdapter implements OneFSAdapter {
     return { dialog: this.dialog, fs: this.fs, core: this.core }
   }
 
+  private async acquireScanLock(): Promise<() => void> {
+    let release: () => void
+    const next = new Promise<void>(resolve => { release = resolve })
+    const prev = this.scanLock
+    this.scanLock = next
+    await prev
+    return release!
+  }
+
   async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
@@ -79,15 +86,20 @@ export class TauriAdapter implements OneFSAdapter {
       }
 
       const paths = Array.isArray(result) ? result : [result]
-      const files: OneFSFile[] = []
 
-      for (const path of paths) {
-        const content = await fs.readFile(path)
+      const fileDataResults = await Promise.all(
+        paths.map(async (path) => {
+          const content = await fs.readFile(path)
+          return { path, content }
+        })
+      )
+
+      const files: OneFSFile[] = fileDataResults.map(({ path, content }) => {
         const name = getFileName(path)
         const id = generateId()
 
         if (shouldPersist) {
-          const storedFile: StoredFile = {
+          this.storage.storeFileDeferred({
             id,
             name,
             path,
@@ -96,11 +108,10 @@ export class TauriAdapter implements OneFSAdapter {
             size: content.byteLength,
             lastModified: Date.now(),
             storedAt: Date.now(),
-          }
-          await this.storage.storeFile(storedFile)
+          })
         }
 
-        files.push({
+        return {
           id,
           name,
           path,
@@ -108,13 +119,12 @@ export class TauriAdapter implements OneFSAdapter {
           mimeType: getMimeType(name),
           size: content.byteLength,
           lastModified: Date.now(),
-        })
-      }
+        }
+      })
 
       return ok(options.multiple ? files : files[0])
     } catch (e) {
       const error = e as Error
-      // Tauri errors for file not found
       if (error.message?.includes('No such file') || error.message?.includes('not found')) {
         return err('not_found', 'File not found', e)
       }
@@ -140,7 +150,7 @@ export class TauriAdapter implements OneFSAdapter {
       await fs.writeFile(file.path, contentArray)
 
       if (shouldPersist) {
-        const storedFile: StoredFile = {
+        this.storage.storeFileDeferred({
           id: file.id,
           name: file.name,
           path: file.path,
@@ -149,8 +159,7 @@ export class TauriAdapter implements OneFSAdapter {
           size: contentArray.byteLength,
           lastModified: Date.now(),
           storedAt: Date.now(),
-        }
-        await this.storage.storeFile(storedFile)
+        })
       }
 
       return ok(true)
@@ -190,7 +199,7 @@ export class TauriAdapter implements OneFSAdapter {
       const id = generateId()
 
       if (shouldPersist) {
-        const storedFile: StoredFile = {
+        this.storage.storeFileDeferred({
           id,
           name,
           path,
@@ -199,8 +208,7 @@ export class TauriAdapter implements OneFSAdapter {
           size: contentArray.byteLength,
           lastModified: Date.now(),
           storedAt: Date.now(),
-        }
-        await this.storage.storeFile(storedFile)
+        })
       }
 
       return ok({
@@ -238,7 +246,7 @@ export class TauriAdapter implements OneFSAdapter {
       const id = generateId()
 
       if (shouldPersist) {
-        const storedFile: StoredFile = {
+        this.storage.storeFileDeferred({
           id,
           name: getFileName(path),
           path,
@@ -247,8 +255,7 @@ export class TauriAdapter implements OneFSAdapter {
           size: 0,
           lastModified: Date.now(),
           storedAt: Date.now(),
-        }
-        await this.storage.storeFile(storedFile)
+        })
       }
 
       return ok({
@@ -262,13 +269,6 @@ export class TauriAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * List directory contents as entries (metadata only).
-   * Use readFileFromDirectory() to load a specific file's content.
-   *
-   * @param directory - Directory to read
-   * @param options.skipStats - Skip stat() calls for faster scanning (size/lastModified will be undefined)
-   */
   async readDirectory(
     directory: OneFSDirectory,
     options: OneFSReadDirectoryOptions = {}
@@ -281,6 +281,7 @@ export class TauriAdapter implements OneFSAdapter {
       const { fs } = await this.loadModules()
       const dirEntries = await fs.readDir(directory.path)
       const entries: OneFSEntry[] = []
+      const needsStat: { index: number; name: string; path: string }[] = []
 
       for (const entry of dirEntries) {
         if (!entry.name) continue
@@ -292,36 +293,37 @@ export class TauriAdapter implements OneFSAdapter {
 
         if (entry.isFile) {
           if (options.skipStats) {
-            entries.push({
-              name: safeName,
-              kind: 'file',
-              path: filePath,
-            })
+            entries.push({ name: safeName, kind: 'file', path: filePath })
           } else {
-            try {
-              const stat = await fs.stat(filePath)
-              entries.push({
-                name: safeName,
-                kind: 'file',
-                size: stat.size,
-                lastModified: stat.mtime ? new Date(stat.mtime).getTime() : Date.now(),
-                path: filePath,
-              })
-            } catch (statError) {
-              options.onError?.(filePath, statError)
-              entries.push({
-                name: safeName,
-                kind: 'file',
-                path: filePath,
-              })
-            }
+            needsStat.push({ index: entries.length, name: safeName, path: filePath })
+            entries.push({ name: safeName, kind: 'file', path: filePath })
           }
         } else if (entry.isDirectory) {
-          entries.push({
-            name: safeName,
-            kind: 'directory',
-            path: filePath,
-          })
+          entries.push({ name: safeName, kind: 'directory', path: filePath })
+        }
+      }
+
+      for (let i = 0; i < needsStat.length; i += STAT_CHUNK_SIZE) {
+        const chunk = needsStat.slice(i, i + STAT_CHUNK_SIZE)
+        const stats = await Promise.all(
+          chunk.map(entry =>
+            fs.stat(entry.path).catch(e => {
+              options.onError?.(entry.path, e)
+              return null
+            })
+          )
+        )
+        for (let j = 0; j < chunk.length; j++) {
+          const stat = stats[j]
+          if (stat) {
+            entries[chunk[j].index] = {
+              name: chunk[j].name,
+              kind: 'file',
+              size: stat.size,
+              lastModified: stat.mtime ? new Date(stat.mtime).getTime() : Date.now(),
+              path: chunk[j].path,
+            }
+          }
         }
       }
 
@@ -338,10 +340,6 @@ export class TauriAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * Load a specific file from a directory.
-   * Note: maxBytes option is not yet implemented for Tauri (full file is always loaded).
-   */
   async readFileFromDirectory(
     directory: OneFSDirectory,
     entry: OneFSEntry,
@@ -380,17 +378,19 @@ export class TauriAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * Recursively scan a directory for files.
-   * Uses iterative approach to avoid stack overflow on deep directories.
-   *
-   * @param directory - Directory to scan
-   * @param options.skipStats - Skip stat() calls for faster scanning
-   * @param options.extensions - File extensions to include (e.g., ['.mp3', '.flac'])
-   * @param options.onProgress - Callback for progress updates (scanned, found)
-   * @param options.signal - AbortSignal for cancellation
-   */
   async scanDirectory(
+    directory: OneFSDirectory,
+    options: OneFSScanOptions = {}
+  ): Promise<OneFSResult<OneFSEntry[]>> {
+    const release = await this.acquireScanLock()
+    try {
+      return await this._scanDirectoryImpl(directory, options)
+    } finally {
+      release()
+    }
+  }
+
+  private async _scanDirectoryImpl(
     directory: OneFSDirectory,
     options: OneFSScanOptions = {}
   ): Promise<OneFSResult<OneFSEntry[]>> {
@@ -410,7 +410,6 @@ export class TauriAdapter implements OneFSAdapter {
       let totalScanned = 0
 
       while (directoriesToScan.length > 0) {
-        // Check for cancellation
         if (signal?.aborted) {
           return err('cancelled', 'Scan was cancelled')
         }
@@ -419,6 +418,7 @@ export class TauriAdapter implements OneFSAdapter {
 
         try {
           const dirEntries = await fs.readDir(currentDir)
+          const fileEntriesToStat: { name: string; path: string }[] = []
 
           for (const entry of dirEntries) {
             if (!entry.name) continue
@@ -437,36 +437,49 @@ export class TauriAdapter implements OneFSAdapter {
               }
 
               if (skipStats) {
-                files.push({
-                  name: safeName,
-                  kind: 'file',
-                  path: entryPath,
-                })
+                files.push({ name: safeName, kind: 'file', path: entryPath })
               } else {
-                try {
-                  const stat = await fs.stat(entryPath)
-                  files.push({
-                    name: safeName,
-                    kind: 'file',
-                    size: stat.size,
-                    lastModified: stat.mtime ? new Date(stat.mtime).getTime() : Date.now(),
-                    path: entryPath,
-                  })
-                } catch (statError) {
-                  onError?.(entryPath, statError)
-                  files.push({
-                    name: safeName,
-                    kind: 'file',
-                    path: entryPath,
-                  })
-                }
+                fileEntriesToStat.push({ name: safeName, path: entryPath })
               }
             }
 
             totalScanned++
           }
 
-          // Report progress and yield to main thread periodically
+          for (let i = 0; i < fileEntriesToStat.length; i += STAT_CHUNK_SIZE) {
+            if (signal?.aborted) {
+              return err('cancelled', 'Scan was cancelled')
+            }
+
+            const chunk = fileEntriesToStat.slice(i, i + STAT_CHUNK_SIZE)
+            const stats = await Promise.all(
+              chunk.map(entry =>
+                fs.stat(entry.path).catch(statError => {
+                  onError?.(entry.path, statError)
+                  return null
+                })
+              )
+            )
+            for (let j = 0; j < chunk.length; j++) {
+              const stat = stats[j]
+              if (stat) {
+                files.push({
+                  name: chunk[j].name,
+                  kind: 'file',
+                  size: stat.size,
+                  lastModified: stat.mtime ? new Date(stat.mtime).getTime() : Date.now(),
+                  path: chunk[j].path,
+                })
+              } else {
+                files.push({ name: chunk[j].name, kind: 'file', path: chunk[j].path })
+              }
+            }
+
+            if (onProgress) {
+              onProgress(totalScanned, files.length)
+            }
+          }
+
           if (onProgress && totalScanned % 100 === 0) {
             onProgress(totalScanned, files.length)
           }
@@ -478,7 +491,6 @@ export class TauriAdapter implements OneFSAdapter {
         }
       }
 
-      // Final progress update
       if (onProgress) {
         onProgress(totalScanned, files.length)
       }
@@ -555,7 +567,6 @@ export class TauriAdapter implements OneFSAdapter {
       return err('not_found', 'Directory path not found')
     }
 
-    // Verify the directory still exists
     try {
       const { fs } = await this.loadModules()
       const stat = await fs.stat(file.path)
@@ -669,12 +680,6 @@ export class TauriAdapter implements OneFSAdapter {
     this.storage.dispose()
   }
 
-  /**
-   * Get an efficient URL for a file using Tauri's asset protocol.
-   * This avoids loading the entire file into memory.
-   * Falls back to a blob URL if convertFileSrc is not available.
-   * Callers must call URL.revokeObjectURL() on blob URLs when done.
-   */
   async getFileUrl(file: OneFSFile): Promise<string> {
     if (!file.path) {
       return URL.createObjectURL(new Blob([toArrayBuffer(file.content)], { type: file.mimeType }))
@@ -688,10 +693,6 @@ export class TauriAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * Get an efficient URL for a directory entry without loading content.
-   * Use this for audio/video streaming where you don't need the file in memory.
-   */
   async getEntryUrl(entry: OneFSEntry): Promise<string | null> {
     if (!entry.path || entry.kind !== 'file') {
       return null

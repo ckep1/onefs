@@ -60,18 +60,22 @@ export class FSAccessAdapter implements OneFSAdapter {
         startIn: options.startIn,
       })
 
-      const files: OneFSFile[] = []
+      const fileDataResults = await Promise.all(
+        handles.map(async (handle) => {
+          const file = await handle.getFile()
+          const content = new Uint8Array(await file.arrayBuffer())
+          return { handle, file, content }
+        })
+      )
 
-      for (const handle of handles) {
-        const file = await handle.getFile()
-        const content = new Uint8Array(await file.arrayBuffer())
+      const files: OneFSFile[] = fileDataResults.map(({ handle, file, content }) => {
         const id = generateId()
 
         if (shouldPersist) {
-          await this.storage.storeHandle(handle, id)
+          this.storage.storeHandle(handle, id).catch(() => {})
         }
 
-        files.push({
+        return {
           id,
           name: handle.name,
           content,
@@ -79,8 +83,8 @@ export class FSAccessAdapter implements OneFSAdapter {
           size: content.byteLength,
           lastModified: file.lastModified,
           handle,
-        })
-      }
+        }
+      })
 
       return ok(options.multiple ? files : files[0])
     } catch (e) {

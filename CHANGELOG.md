@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.2] - 2026-03-03
+
+### Performance
+
+- Parallel file reads in `openFile` across all adapters — multiple selected files load concurrently via `Promise.all`
+- Batched stat calls in Tauri `readDirectory` and `scanDirectory` — chunks of 25 via `Promise.all` instead of sequential native bridge calls
+- Scan mutex on Tauri and Capacitor — serializes concurrent `scanDirectory` calls to prevent native bridge contention
+- IDB prune batching — all excess entries deleted in a single transaction instead of individual deletes
+- IDB prune buffer — pruning only triggers when count exceeds threshold by 5, avoiding prune on every store
+- Deferred IDB persistence — `openFile`/`saveFile` return immediately, IDB writes happen in background via `storeFileDeferred`
+- Parallel file reads and copies in Capacitor file picker
+- Faster base64 encoding — native `Buffer` fast path for Node/Bun, increased chunk size (32KB) for browser fallback
+
+### Fixed
+
+- Tauri `readDirectory` preserves native entry ordering (files and directories interleaved) instead of grouping by type
+
 ## [0.6.1] - 2026-03-03
 
 ### Added

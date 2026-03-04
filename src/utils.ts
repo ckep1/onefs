@@ -56,7 +56,10 @@ export function getFileName(path: string): string {
 }
 
 export function uint8ArrayToBase64(bytes: Uint8Array): string {
-  const CHUNK = 8192
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64')
+  }
+  const CHUNK = 32768
   let binary = ''
   for (let i = 0; i < bytes.length; i += CHUNK) {
     const slice = bytes.subarray(i, Math.min(i + CHUNK, bytes.length))

@@ -38,24 +38,13 @@ interface FilePicker {
   }): Promise<FilePickerResult>
 }
 
-/**
- * Adapter for Capacitor mobile applications.
- *
- * Primary workflow: Enable Files app sharing via Info.plist, then scan Documents folder.
- * Users drag files into your app's folder in the iOS Files app.
- *
- * Info.plist settings required:
- * - UIFileSharingEnabled: true
- * - LSSupportsOpeningDocumentsInPlace: true
- *
- * Note: saveFile() saves to the app's Documents directory.
- */
 export class CapacitorAdapter implements OneFSAdapter {
   platform = 'capacitor' as const
   private storage: IDBStorage
   private filesystem: CapacitorFilesystem | null = null
   private core: CapacitorCore | null = null
   private persistByDefault: boolean
+  private scanLock: Promise<void> = Promise.resolve()
 
   constructor(appName: string, maxRecentFiles = 10, persistByDefault = true) {
     this.storage = new IDBStorage(appName, maxRecentFiles)
@@ -82,25 +71,32 @@ export class CapacitorAdapter implements OneFSAdapter {
     return this.core
   }
 
-  /**
-   * Open file picker. Uses @capawesome/capacitor-file-picker if available,
-   * falls back to HTML input element.
-   */
+  private async acquireScanLock(): Promise<() => void> {
+    let release: () => void
+    const next = new Promise<void>(resolve => { release = resolve })
+    const prev = this.scanLock
+    this.scanLock = next
+    await prev
+    return release!
+  }
+
   async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
-      // Try to use @capawesome/capacitor-file-picker
       const files = await this.pickFilesWithPlugin(options)
       if (files) {
-        const result = shouldPersist ? await this.persistFiles(files) : files
-        return ok(options.multiple ? result : result[0])
+        if (shouldPersist) {
+          for (const file of files) {
+            this.storage.storeFileDeferred({ ...file, storedAt: Date.now() })
+          }
+        }
+        return ok(options.multiple ? files : files[0])
       }
     } catch {
       // Plugin not available, fall through to HTML input
     }
 
-    // Fallback to HTML input
     return this.pickFilesWithInput(options, shouldPersist)
   }
 
@@ -120,37 +116,36 @@ export class CapacitorAdapter implements OneFSAdapter {
         readData: false,
       })
 
-      const files: OneFSFile[] = []
+      const fileResults = await Promise.all(
+        result.files.map(async (picked) => {
+          const safeName = sanitizeFileName(picked.name)
+          const destName = `${generateId()}_${safeName}`
+          const destPath = destName
 
-      for (const picked of result.files) {
-        const safeName = sanitizeFileName(picked.name)
-        const destName = `${generateId()}_${safeName}`
-        const destPath = destName
+          const fileData = await Filesystem.readFile({ path: picked.path! })
+          await Filesystem.writeFile({
+            path: destPath,
+            data: fileData.data,
+            directory: Directory.Documents,
+          })
 
-        // Read and copy to Documents
-        const fileData = await Filesystem.readFile({ path: picked.path! })
-        await Filesystem.writeFile({
-          path: destPath,
-          data: fileData.data,
-          directory: Directory.Documents,
+          const content = typeof fileData.data === 'string'
+            ? base64ToUint8Array(fileData.data)
+            : new Uint8Array(await (fileData.data as Blob).arrayBuffer())
+
+          return {
+            id: generateId(),
+            name: picked.name,
+            path: destPath,
+            content,
+            mimeType: picked.mimeType || getMimeType(picked.name),
+            size: content.byteLength,
+            lastModified: picked.modifiedAt ?? Date.now(),
+          }
         })
+      )
 
-        const content = typeof fileData.data === 'string'
-          ? base64ToUint8Array(fileData.data)
-          : new Uint8Array(await (fileData.data as Blob).arrayBuffer())
-
-        files.push({
-          id: generateId(),
-          name: picked.name,
-          path: destPath,
-          content,
-          mimeType: picked.mimeType || getMimeType(picked.name),
-          size: content.byteLength,
-          lastModified: picked.modifiedAt ?? Date.now(),
-        })
-      }
-
-      return files.length > 0 ? files : null
+      return fileResults.length > 0 ? fileResults : null
     } catch {
       return null
     }
@@ -176,16 +171,21 @@ export class CapacitorAdapter implements OneFSAdapter {
 
         try {
           const { Filesystem, Directory } = await this.loadFilesystem()
-          const files: OneFSFile[] = []
 
-          for (let i = 0; i < fileList.length; i++) {
-            const file = fileList[i]
-            const content = new Uint8Array(await file.arrayBuffer())
+          const results = await Promise.all(
+            Array.from(fileList).map(async (file) => {
+              const content = new Uint8Array(await file.arrayBuffer())
+              return { file, content }
+            })
+          )
+
+          const filesOut: OneFSFile[] = []
+
+          for (const { file, content } of results) {
             const id = generateId()
             const safeName = sanitizeFileName(file.name)
             const destPath = `${id}_${safeName}`
 
-            // Copy to Documents for persistent access
             await Filesystem.writeFile({
               path: destPath,
               data: uint8ArrayToBase64(content),
@@ -203,16 +203,13 @@ export class CapacitorAdapter implements OneFSAdapter {
             }
 
             if (shouldPersist) {
-              await this.storage.storeFile({
-                ...onefsFile,
-                storedAt: Date.now(),
-              })
+              this.storage.storeFileDeferred({ ...onefsFile, storedAt: Date.now() })
             }
 
-            files.push(onefsFile)
+            filesOut.push(onefsFile)
           }
 
-          resolve(ok(options.multiple ? files : files[0]))
+          resolve(ok(options.multiple ? filesOut : filesOut[0]))
         } catch (e) {
           const error = e as Error
           resolve(err('io_error', error.message || 'Failed to read file', e))
@@ -222,16 +219,6 @@ export class CapacitorAdapter implements OneFSAdapter {
       input.oncancel = () => resolve(err('cancelled', 'User cancelled file picker'))
       input.click()
     })
-  }
-
-  private async persistFiles(files: OneFSFile[]): Promise<OneFSFile[]> {
-    for (const file of files) {
-      await this.storage.storeFile({
-        ...file,
-        storedAt: Date.now(),
-      })
-    }
-    return files
   }
 
   async saveFile(
@@ -254,7 +241,7 @@ export class CapacitorAdapter implements OneFSAdapter {
       })
 
       if (shouldPersist) {
-        await this.storage.storeFile({
+        this.storage.storeFileDeferred({
           id: file.id,
           name: file.name,
           path: fileName,
@@ -304,7 +291,7 @@ export class CapacitorAdapter implements OneFSAdapter {
       }
 
       if (shouldPersist) {
-        await this.storage.storeFile({ ...file, storedAt: Date.now() })
+        this.storage.storeFileDeferred({ ...file, storedAt: Date.now() })
       }
 
       return ok(file)
@@ -317,15 +304,10 @@ export class CapacitorAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * Opens the app's Documents directory.
-   * This is the folder exposed in iOS Files app when UIFileSharingEnabled is true.
-   */
   async openDirectory(_options: OneFSDirectoryOptions = {}): Promise<OneFSResult<OneFSDirectory>> {
     try {
       const { Filesystem, Directory } = await this.loadFilesystem()
 
-      // Verify we can access the directory
       await Filesystem.readdir({
         path: '',
         directory: Directory.Documents,
@@ -347,9 +329,6 @@ export class CapacitorAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * List directory contents as entries (metadata only).
-   */
   async readDirectory(
     directory: OneFSDirectory,
     options: OneFSReadDirectoryOptions = {}
@@ -406,10 +385,19 @@ export class CapacitorAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * Recursively scan directory for files.
-   */
   async scanDirectory(
+    directory: OneFSDirectory,
+    options: OneFSScanOptions = {}
+  ): Promise<OneFSResult<OneFSEntry[]>> {
+    const release = await this.acquireScanLock()
+    try {
+      return await this._scanDirectoryImpl(directory, options)
+    } finally {
+      release()
+    }
+  }
+
+  private async _scanDirectoryImpl(
     directory: OneFSDirectory,
     options: OneFSScanOptions = {}
   ): Promise<OneFSResult<OneFSEntry[]>> {
@@ -499,10 +487,6 @@ export class CapacitorAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * Load a specific file from a directory.
-   * Supports partial reads via maxBytes option to reduce memory usage for large files.
-   */
   async readFileFromDirectory(
     directory: OneFSDirectory,
     entry: OneFSEntry,
@@ -547,7 +531,6 @@ export class CapacitorAdapter implements OneFSAdapter {
         }
       }
 
-      // Full file read (original behavior)
       const fileData = await Filesystem.readFile({
         path: entry.path,
         directory: Directory.Documents,
@@ -581,12 +564,6 @@ export class CapacitorAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * Get an efficient URL for a file using Capacitor's convertFileSrc.
-   * This avoids loading the entire file into memory.
-   * Falls back to a blob URL if convertFileSrc fails.
-   * Callers must call URL.revokeObjectURL() on blob URLs when done.
-   */
   async getFileUrl(file: OneFSFile): Promise<string> {
     if (!file.path) {
       return URL.createObjectURL(new Blob([toArrayBuffer(file.content)], { type: file.mimeType }))
@@ -607,10 +584,6 @@ export class CapacitorAdapter implements OneFSAdapter {
     }
   }
 
-  /**
-   * Get an efficient URL for a directory entry without loading content.
-   * Use this for audio/video streaming.
-   */
   async getEntryUrl(entry: OneFSEntry): Promise<string | null> {
     if (!entry.path || entry.kind !== 'file') {
       return null
@@ -696,7 +669,6 @@ export class CapacitorAdapter implements OneFSAdapter {
   }
 
   async restoreDirectory(stored: StoredHandle): Promise<OneFSResult<OneFSDirectory>> {
-    // For Capacitor, we only support the Documents directory
     if (stored.type !== 'directory') {
       return err('not_found', 'Not a directory')
     }

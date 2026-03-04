@@ -52,15 +52,18 @@ export class PickerIDBAdapter implements OneFSAdapter {
         }
 
         try {
-          const files: OneFSFile[] = []
+          const results = await Promise.all(
+            Array.from(fileList).map(async (file) => {
+              const content = new Uint8Array(await file.arrayBuffer())
+              return { file, content }
+            })
+          )
 
-          for (let i = 0; i < fileList.length; i++) {
-            const file = fileList[i]
-            const content = new Uint8Array(await file.arrayBuffer())
+          const files: OneFSFile[] = results.map(({ file, content }) => {
             const id = generateId()
 
             if (shouldPersist) {
-              const storedFile: StoredFile = {
+              this.storage.storeFileDeferred({
                 id,
                 name: file.name,
                 content,
@@ -68,19 +71,18 @@ export class PickerIDBAdapter implements OneFSAdapter {
                 size: content.byteLength,
                 lastModified: file.lastModified,
                 storedAt: Date.now(),
-              }
-              await this.storage.storeFile(storedFile)
+              })
             }
 
-            files.push({
+            return {
               id,
               name: file.name,
               content,
               mimeType: file.type || getMimeType(file.name),
               size: content.byteLength,
               lastModified: file.lastModified,
-            })
-          }
+            }
+          })
 
           resolve(ok(options.multiple ? files : files[0]))
         } catch (e) {

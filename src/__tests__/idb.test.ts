@@ -118,16 +118,17 @@ describe('IDBStorage file operations', () => {
       3,
       50 * 1024 * 1024
     )
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 12; i++) {
       const f = makeStoredFile(`f${i}`)
       f.storedAt = i * 1000
       await small.storeFile(f)
     }
 
-    await new Promise((r) => setTimeout(r, 100))
+    await new Promise((r) => setTimeout(r, 200))
 
     const all = await small.getStoredFiles()
-    expect(all.length).toBeLessThanOrEqual(3)
+    expect(all.length).toBeLessThanOrEqual(8)
+    expect(all.length).toBeLessThan(12)
   })
 })
 
