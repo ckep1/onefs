@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.3] - 2026-04-10
+
+### Security
+
+- Capacitor `deleteFile` and `renameFile` now enforce file provenance before destructive operations (must match persisted storage or active adapter session path)
+- Added Capacitor Documents-path validation to reject invalid or traversal-like paths before file reads/renames/deletes
+
+### Fixed
+
+- Capacitor `readFileFromDirectory` now correctly allows root Documents reads when `openDirectory()` returns `path: ''`
+- Tauri path joining and rename parent-path handling now preserve native separators (`/` and `\`) to avoid Windows path corruption
+- Build output now excludes test declaration files from the published package tarball
+
+### Added
+
+- Regression tests for Capacitor root-directory reads and destructive-operation authorization checks
+- Regression tests for Tauri Windows path handling and destructive-operation authorization checks
+
 ## [0.6.2] - 2026-03-03
 
 ### Performance

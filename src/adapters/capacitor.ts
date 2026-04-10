@@ -45,6 +45,7 @@ export class CapacitorAdapter implements OneFSAdapter {
   private core: CapacitorCore | null = null
   private persistByDefault: boolean
   private scanLock: Promise<void> = Promise.resolve()
+  private sessionPaths = new Map<string, string>()
 
   constructor(appName: string, maxRecentFiles = 10, persistByDefault = true) {
     this.storage = new IDBStorage(appName, maxRecentFiles)
@@ -80,12 +81,56 @@ export class CapacitorAdapter implements OneFSAdapter {
     return release!
   }
 
+  private isSafeDocumentsPath(path: string): boolean {
+    if (!path || path.includes('\0')) return false
+
+    const normalized = path.replace(/\\/g, '/')
+    if (normalized.startsWith('/') || normalized.startsWith('../')) return false
+
+    const segments = normalized.split('/')
+    return segments.every((segment) => segment.length > 0 && segment !== '.' && segment !== '..')
+  }
+
+  private registerSessionFile(file: Pick<OneFSFile, 'id' | 'path'>): void {
+    if (!file.path || !this.isSafeDocumentsPath(file.path)) return
+    this.sessionPaths.set(file.id, file.path)
+  }
+
+  private async resolveAuthorizedPath(file: OneFSFile): Promise<OneFSResult<string>> {
+    const requestedPath = file.path ?? `${file.id}_${sanitizeFileName(file.name)}`
+    if (!this.isSafeDocumentsPath(requestedPath)) {
+      return err('permission_denied', 'Invalid file path')
+    }
+
+    try {
+      const stored = await this.storage.getStoredFile(file.id)
+      if (stored?.path) {
+        if (stored.path !== requestedPath) {
+          return err('permission_denied', 'File path does not match stored record')
+        }
+        return ok(requestedPath)
+      }
+
+      const livePath = this.sessionPaths.get(file.id)
+      if (livePath === requestedPath) {
+        return ok(requestedPath)
+      }
+
+      return err('permission_denied', 'File was not opened through this adapter')
+    } catch (e) {
+      return err('io_error', 'Failed to verify file provenance', e)
+    }
+  }
+
   async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
     try {
       const files = await this.pickFilesWithPlugin(options)
       if (files) {
+        for (const file of files) {
+          this.registerSessionFile(file)
+        }
         if (shouldPersist) {
           for (const file of files) {
             this.storage.storeFileDeferred({ ...file, storedAt: Date.now() })
@@ -118,8 +163,9 @@ export class CapacitorAdapter implements OneFSAdapter {
 
       const fileResults = await Promise.all(
         result.files.map(async (picked) => {
+          const id = generateId()
           const safeName = sanitizeFileName(picked.name)
-          const destName = `${generateId()}_${safeName}`
+          const destName = `${id}_${safeName}`
           const destPath = destName
 
           const fileData = await Filesystem.readFile({ path: picked.path! })
@@ -134,7 +180,7 @@ export class CapacitorAdapter implements OneFSAdapter {
             : new Uint8Array(await (fileData.data as Blob).arrayBuffer())
 
           return {
-            id: generateId(),
+            id,
             name: picked.name,
             path: destPath,
             content,
@@ -205,6 +251,7 @@ export class CapacitorAdapter implements OneFSAdapter {
             if (shouldPersist) {
               this.storage.storeFileDeferred({ ...onefsFile, storedAt: Date.now() })
             }
+            this.registerSessionFile(onefsFile)
 
             filesOut.push(onefsFile)
           }
@@ -227,18 +274,21 @@ export class CapacitorAdapter implements OneFSAdapter {
     options?: OneFSSaveOptions
   ): Promise<OneFSResult<boolean>> {
     const shouldPersist = options?.persist ?? this.persistByDefault
+    const authorized = await this.resolveAuthorizedPath(file)
+    if (!authorized.ok) return authorized
+    const fileName = authorized.data
 
     try {
       const { Filesystem, Directory } = await this.loadFilesystem()
 
       const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
-      const fileName = file.path ?? `${file.id}_${sanitizeFileName(file.name)}`
 
       await Filesystem.writeFile({
         path: fileName,
         data: uint8ArrayToBase64(contentArray),
         directory: Directory.Documents,
       })
+      this.registerSessionFile({ id: file.id, path: fileName })
 
       if (shouldPersist) {
         this.storage.storeFileDeferred({
@@ -293,6 +343,7 @@ export class CapacitorAdapter implements OneFSAdapter {
       if (shouldPersist) {
         this.storage.storeFileDeferred({ ...file, storedAt: Date.now() })
       }
+      this.registerSessionFile(file)
 
       return ok(file)
     } catch (e) {
@@ -496,7 +547,11 @@ export class CapacitorAdapter implements OneFSAdapter {
       return err('not_supported', 'Cannot read file without path')
     }
 
-    if (directory.path !== undefined && !isPathWithin(entry.path, directory.path)) {
+    if (!this.isSafeDocumentsPath(entry.path)) {
+      return err('permission_denied', 'Invalid file path')
+    }
+
+    if (directory.path && !isPathWithin(entry.path, directory.path)) {
       return err('permission_denied', 'Path is outside the expected directory')
     }
 
@@ -518,8 +573,7 @@ export class CapacitorAdapter implements OneFSAdapter {
         if (response.ok || response.status === 206) {
           const arrayBuffer = await response.arrayBuffer()
           const content = new Uint8Array(arrayBuffer)
-
-          return ok({
+          const partialFile: OneFSFile = {
             id: generateId(),
             name: entry.name,
             path: entry.path,
@@ -527,7 +581,10 @@ export class CapacitorAdapter implements OneFSAdapter {
             mimeType: getMimeType(entry.name),
             size: content.byteLength,
             lastModified: entry.lastModified ?? Date.now(),
-          })
+          }
+          this.registerSessionFile(partialFile)
+
+          return ok(partialFile)
         }
       }
 
@@ -543,7 +600,7 @@ export class CapacitorAdapter implements OneFSAdapter {
         content = base64ToUint8Array(fileData.data as string)
       }
 
-      return ok({
+      const loadedFile: OneFSFile = {
         id: generateId(),
         name: entry.name,
         path: entry.path,
@@ -551,7 +608,10 @@ export class CapacitorAdapter implements OneFSAdapter {
         mimeType: getMimeType(entry.name),
         size: content.byteLength,
         lastModified: entry.lastModified ?? Date.now(),
-      })
+      }
+      this.registerSessionFile(loadedFile)
+
+      return ok(loadedFile)
     } catch (e) {
       const error = e as Error
       if (error.message?.includes('not found') || error.message?.includes('does not exist')) {
@@ -616,12 +676,21 @@ export class CapacitorAdapter implements OneFSAdapter {
   }
 
   async restoreFile(stored: StoredHandle): Promise<OneFSResult<OneFSFile>> {
-    if (stored.path) {
+    const file = await this.storage.getStoredFile(stored.id)
+    if (!file || file.mimeType === DIRECTORY_MIME_TYPE) {
+      return err('not_found', 'File not found in storage')
+    }
+
+    if (file.path) {
+      if (!this.isSafeDocumentsPath(file.path)) {
+        return err('permission_denied', 'Invalid stored file path')
+      }
+
       try {
         const { Filesystem, Directory } = await this.loadFilesystem()
 
         const fileData = await Filesystem.readFile({
-          path: stored.path,
+          path: file.path,
           directory: Directory.Documents,
         })
 
@@ -633,31 +702,28 @@ export class CapacitorAdapter implements OneFSAdapter {
         }
 
         const stat = await Filesystem.stat({
-          path: stored.path,
+          path: file.path,
           directory: Directory.Documents,
         })
 
-        return ok({
-          id: stored.id,
-          name: stored.name,
-          path: stored.path,
+        const restored: OneFSFile = {
+          id: file.id,
+          name: file.name,
+          path: file.path,
           content,
-          mimeType: getMimeType(stored.name),
+          mimeType: file.mimeType,
           size: content.byteLength,
           lastModified: stat.mtime ?? Date.now(),
-        })
+        }
+        this.registerSessionFile(restored)
+        return ok(restored)
       } catch (e) {
         const message = e instanceof Error ? e.message : 'File no longer accessible'
         return err('not_found', message, e)
       }
     }
 
-    const file = await this.storage.getStoredFile(stored.id)
-    if (!file) {
-      return err('not_found', 'File not found in storage')
-    }
-
-    return ok({
+    const restoredFromCache: OneFSFile = {
       id: file.id,
       name: file.name,
       path: file.path,
@@ -665,7 +731,9 @@ export class CapacitorAdapter implements OneFSAdapter {
       mimeType: file.mimeType,
       size: file.size,
       lastModified: file.lastModified,
-    })
+    }
+    this.registerSessionFile(restoredFromCache)
+    return ok(restoredFromCache)
   }
 
   async restoreDirectory(stored: StoredHandle): Promise<OneFSResult<OneFSDirectory>> {
@@ -693,7 +761,9 @@ export class CapacitorAdapter implements OneFSAdapter {
   }
 
   async deleteFile(file: OneFSFile): Promise<OneFSResult<boolean>> {
-    const path = file.path ?? `${file.id}_${sanitizeFileName(file.name)}`
+    const authorized = await this.resolveAuthorizedPath(file)
+    if (!authorized.ok) return authorized
+    const path = authorized.data
 
     try {
       const { Filesystem, Directory } = await this.loadFilesystem()
@@ -702,6 +772,7 @@ export class CapacitorAdapter implements OneFSAdapter {
         directory: Directory.Documents,
       })
       await this.storage.removeFile(file.id)
+      this.sessionPaths.delete(file.id)
       return ok(true)
     } catch (e) {
       const error = e as Error
@@ -721,9 +792,14 @@ export class CapacitorAdapter implements OneFSAdapter {
       return err('io_error', 'Invalid file name')
     }
 
-    const oldPath = file.path ?? `${file.id}_${sanitizeFileName(file.name)}`
+    const authorized = await this.resolveAuthorizedPath(file)
+    if (!authorized.ok) return authorized
+    const oldPath = authorized.data
     const parentDir = oldPath.includes('/') ? oldPath.substring(0, oldPath.lastIndexOf('/')) : ''
     const newPath = parentDir ? `${parentDir}/${sanitized}` : sanitized
+    if (!this.isSafeDocumentsPath(newPath)) {
+      return err('io_error', 'Invalid file name')
+    }
 
     try {
       const { Filesystem, Directory } = await this.loadFilesystem()
@@ -751,6 +827,7 @@ export class CapacitorAdapter implements OneFSAdapter {
         lastModified: updatedFile.lastModified,
         storedAt: Date.now(),
       })
+      this.registerSessionFile(updatedFile)
 
       return ok(updatedFile)
     } catch (e) {
@@ -767,13 +844,16 @@ export class CapacitorAdapter implements OneFSAdapter {
 
   async removeFromRecent(id: string): Promise<void> {
     await this.storage.removeFile(id)
+    this.sessionPaths.delete(id)
   }
 
   async clearRecent(): Promise<void> {
     await this.storage.clearFiles()
+    this.sessionPaths.clear()
   }
 
   dispose(): void {
     this.storage.dispose()
+    this.sessionPaths.clear()
   }
 }

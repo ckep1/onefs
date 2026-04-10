@@ -14,7 +14,7 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, getFileName, sanitizeFileName, isPathWithin, toArrayBuffer } from '../utils'
+import { generateId, getMimeType, getFileName, sanitizeFileName, isPathWithin, normalizePath, toArrayBuffer } from '../utils'
 
 type TauriDialog = typeof import('@tauri-apps/plugin-dialog')
 type TauriFS = typeof import('@tauri-apps/plugin-fs')
@@ -31,6 +31,7 @@ export class TauriAdapter implements OneFSAdapter {
   private core: TauriCore | null = null
   private persistByDefault: boolean
   private scanLock: Promise<void> = Promise.resolve()
+  private sessionPaths = new Map<string, string>()
 
   constructor(appName: string, maxRecentFiles = 10, persistByDefault = true) {
     this.storage = new IDBStorage(appName, maxRecentFiles)
@@ -63,6 +64,59 @@ export class TauriAdapter implements OneFSAdapter {
     this.scanLock = next
     await prev
     return release!
+  }
+
+  private getPreferredSeparator(path: string): '/' | '\\' {
+    return path.includes('\\') && !path.includes('/') ? '\\' : '/'
+  }
+
+  private joinPath(parent: string, child: string): string {
+    if (!parent) return child
+    const separator = this.getPreferredSeparator(parent)
+    const normalizedParent = parent.endsWith('/') || parent.endsWith('\\') ? parent.slice(0, -1) : parent
+    return `${normalizedParent}${separator}${child}`
+  }
+
+  private splitParentPath(path: string): { parent: string; separator: '/' | '\\' } | null {
+    const forwardSlash = path.lastIndexOf('/')
+    const backwardSlash = path.lastIndexOf('\\')
+    const index = Math.max(forwardSlash, backwardSlash)
+    if (index < 0) return null
+
+    return {
+      parent: path.slice(0, index),
+      separator: path[index] === '\\' ? '\\' : '/',
+    }
+  }
+
+  private registerSessionFile(file: Pick<OneFSFile, 'id' | 'path'>): void {
+    if (!file.path) return
+    this.sessionPaths.set(file.id, file.path)
+  }
+
+  private pathsMatch(left: string, right: string): boolean {
+    return normalizePath(left) === normalizePath(right)
+  }
+
+  private async resolveAuthorizedPath(file: OneFSFile): Promise<OneFSResult<string>> {
+    if (!file.path) {
+      return err('not_supported', 'Cannot operate on file without path')
+    }
+
+    const sessionPath = this.sessionPaths.get(file.id)
+    if (sessionPath && this.pathsMatch(sessionPath, file.path)) {
+      return ok(file.path)
+    }
+
+    try {
+      const stored = await this.storage.getStoredFile(file.id)
+      if (stored?.path && this.pathsMatch(stored.path, file.path)) {
+        return ok(stored.path)
+      }
+      return err('permission_denied', 'File was not opened through this adapter')
+    } catch (e) {
+      return err('io_error', 'Failed to verify file provenance', e)
+    }
   }
 
   async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
@@ -111,7 +165,7 @@ export class TauriAdapter implements OneFSAdapter {
           })
         }
 
-        return {
+        const file: OneFSFile = {
           id,
           name,
           path,
@@ -120,6 +174,8 @@ export class TauriAdapter implements OneFSAdapter {
           size: content.byteLength,
           lastModified: Date.now(),
         }
+        this.registerSessionFile(file)
+        return file
       })
 
       return ok(options.multiple ? files : files[0])
@@ -137,23 +193,23 @@ export class TauriAdapter implements OneFSAdapter {
     content: Uint8Array | string,
     options?: OneFSSaveOptions
   ): Promise<OneFSResult<boolean>> {
-    if (!file.path) {
-      return err('not_supported', 'Cannot save file without path - use saveFileAs instead')
-    }
-
     const shouldPersist = options?.persist ?? this.persistByDefault
+    const authorized = await this.resolveAuthorizedPath(file)
+    if (!authorized.ok) return authorized
+    const path = authorized.data
 
     try {
       const { fs } = await this.loadModules()
       const contentArray = typeof content === 'string' ? new TextEncoder().encode(content) : content
 
-      await fs.writeFile(file.path, contentArray)
+      await fs.writeFile(path, contentArray)
+      this.registerSessionFile({ id: file.id, path })
 
       if (shouldPersist) {
         this.storage.storeFileDeferred({
           id: file.id,
           name: file.name,
-          path: file.path,
+          path,
           content: contentArray,
           mimeType: file.mimeType,
           size: contentArray.byteLength,
@@ -211,7 +267,7 @@ export class TauriAdapter implements OneFSAdapter {
         })
       }
 
-      return ok({
+      const file: OneFSFile = {
         id,
         name,
         path,
@@ -219,7 +275,9 @@ export class TauriAdapter implements OneFSAdapter {
         mimeType: getMimeType(name),
         size: contentArray.byteLength,
         lastModified: Date.now(),
-      })
+      }
+      this.registerSessionFile(file)
+      return ok(file)
     } catch (e) {
       const error = e as Error
       if (error.message?.includes('Permission denied')) {
@@ -287,7 +345,7 @@ export class TauriAdapter implements OneFSAdapter {
         if (!entry.name) continue
 
         const safeName = sanitizeFileName(entry.name)
-        const filePath = `${directory.path}/${safeName}`
+        const filePath = this.joinPath(directory.path, safeName)
 
         if (!isPathWithin(filePath, directory.path)) continue
 
@@ -357,7 +415,7 @@ export class TauriAdapter implements OneFSAdapter {
       const { fs } = await this.loadModules()
       const content = await fs.readFile(entry.path)
 
-      return ok({
+      const loadedFile: OneFSFile = {
         id: generateId(),
         name: entry.name,
         path: entry.path,
@@ -365,7 +423,9 @@ export class TauriAdapter implements OneFSAdapter {
         mimeType: getMimeType(entry.name),
         size: content.byteLength,
         lastModified: entry.lastModified ?? Date.now(),
-      })
+      }
+      this.registerSessionFile(loadedFile)
+      return ok(loadedFile)
     } catch (e) {
       const error = e as Error
       if (error.message?.includes('No such file') || error.message?.includes('not found')) {
@@ -424,7 +484,7 @@ export class TauriAdapter implements OneFSAdapter {
             if (!entry.name) continue
 
             const safeName = sanitizeFileName(entry.name)
-            const entryPath = `${currentDir}/${safeName}`
+            const entryPath = this.joinPath(currentDir, safeName)
 
             if (!isPathWithin(entryPath, directory.path)) continue
 
@@ -531,7 +591,7 @@ export class TauriAdapter implements OneFSAdapter {
         const content = await fs.readFile(file.path)
         const stat = await fs.stat(file.path)
 
-        return ok({
+        const restored: OneFSFile = {
           id: file.id,
           name: file.name,
           path: file.path,
@@ -539,14 +599,16 @@ export class TauriAdapter implements OneFSAdapter {
           mimeType: file.mimeType,
           size: content.byteLength,
           lastModified: stat.mtime ? new Date(stat.mtime).getTime() : file.lastModified,
-        })
+        }
+        this.registerSessionFile(restored)
+        return ok(restored)
       } catch (e) {
         const message = e instanceof Error ? e.message : 'File no longer accessible'
         return err('not_found', message, e)
       }
     }
 
-    return ok({
+    const restoredFromCache: OneFSFile = {
       id: file.id,
       name: file.name,
       path: file.path,
@@ -554,7 +616,9 @@ export class TauriAdapter implements OneFSAdapter {
       mimeType: file.mimeType,
       size: file.size,
       lastModified: file.lastModified,
-    })
+    }
+    this.registerSessionFile(restoredFromCache)
+    return ok(restoredFromCache)
   }
 
   async restoreDirectory(stored: StoredHandle): Promise<OneFSResult<OneFSDirectory>> {
@@ -589,19 +653,15 @@ export class TauriAdapter implements OneFSAdapter {
   }
 
   async deleteFile(file: OneFSFile): Promise<OneFSResult<boolean>> {
-    if (!file.path) {
-      return err('not_supported', 'Cannot delete file without path')
-    }
-
-    const stored = await this.storage.getStoredFile(file.id)
-    if (!stored || stored.path !== file.path) {
-      return err('permission_denied', 'File was not opened through this adapter')
-    }
+    const authorized = await this.resolveAuthorizedPath(file)
+    if (!authorized.ok) return authorized
+    const path = authorized.data
 
     try {
       const { fs } = await this.loadModules()
-      await fs.remove(file.path)
+      await fs.remove(path)
       await this.storage.removeFile(file.id)
+      this.sessionPaths.delete(file.id)
       return ok(true)
     } catch (e) {
       const error = e as Error
@@ -616,26 +676,22 @@ export class TauriAdapter implements OneFSAdapter {
   }
 
   async renameFile(file: OneFSFile, newName: string): Promise<OneFSResult<OneFSFile>> {
-    if (!file.path) {
-      return err('not_supported', 'Cannot rename file without path')
-    }
-
     const sanitized = sanitizeFileName(newName)
     if (!sanitized) {
       return err('io_error', 'Invalid file name')
     }
-
-    const stored = await this.storage.getStoredFile(file.id)
-    if (!stored || stored.path !== file.path) {
-      return err('permission_denied', 'File was not opened through this adapter')
-    }
+    const authorized = await this.resolveAuthorizedPath(file)
+    if (!authorized.ok) return authorized
+    const oldPath = authorized.data
 
     try {
       const { fs } = await this.loadModules()
-      const parentDir = file.path.substring(0, file.path.lastIndexOf('/'))
-      const newPath = parentDir ? `${parentDir}/${sanitized}` : sanitized
+      const parentPath = this.splitParentPath(oldPath)
+      const newPath = parentPath
+        ? `${parentPath.parent}${parentPath.separator}${sanitized}`
+        : sanitized
 
-      await fs.rename(file.path, newPath)
+      await fs.rename(oldPath, newPath)
 
       const updatedFile: OneFSFile = {
         ...file,
@@ -654,6 +710,7 @@ export class TauriAdapter implements OneFSAdapter {
         lastModified: updatedFile.lastModified,
         storedAt: Date.now(),
       })
+      this.registerSessionFile(updatedFile)
 
       return ok(updatedFile)
     } catch (e) {
@@ -670,14 +727,17 @@ export class TauriAdapter implements OneFSAdapter {
 
   async removeFromRecent(id: string): Promise<void> {
     await this.storage.removeFile(id)
+    this.sessionPaths.delete(id)
   }
 
   async clearRecent(): Promise<void> {
     await this.storage.clearFiles()
+    this.sessionPaths.clear()
   }
 
   dispose(): void {
     this.storage.dispose()
+    this.sessionPaths.clear()
   }
 
   async getFileUrl(file: OneFSFile): Promise<string> {
