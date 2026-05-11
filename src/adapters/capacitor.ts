@@ -13,7 +13,7 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, base64ToUint8Array, uint8ArrayToBase64, toArrayBuffer, sanitizeFileName, isPathWithin } from '../utils'
+import { generateId, getMimeType, base64ToUint8Array, uint8ArrayToBase64, toArrayBuffer, sanitizeFileName, isPathWithin, isSafeEntryName } from '../utils'
 
 type CapacitorFilesystem = typeof import('@capacitor/filesystem')
 type CapacitorCore = typeof import('@capacitor/core')
@@ -395,25 +395,26 @@ export class CapacitorAdapter implements OneFSAdapter {
       const entries: OneFSEntry[] = []
 
       for (const entry of result.files) {
-        const safeName = sanitizeFileName(entry.name)
-        const filePath = directory.path ? `${directory.path}/${safeName}` : safeName
+        if (!isSafeEntryName(entry.name)) continue
+        const entryName = entry.name
+        const filePath = directory.path ? `${directory.path}/${entryName}` : entryName
 
         if (entry.type === 'directory') {
           entries.push({
-            name: safeName,
+            name: entryName,
             kind: 'directory',
             path: filePath,
           })
         } else {
           if (options.skipStats) {
             entries.push({
-              name: safeName,
+              name: entryName,
               kind: 'file',
               path: filePath,
             })
           } else {
             entries.push({
-              name: safeName,
+              name: entryName,
               kind: 'file',
               size: entry.size,
               lastModified: entry.mtime ?? Date.now(),
@@ -477,14 +478,15 @@ export class CapacitorAdapter implements OneFSAdapter {
           })
 
           for (const entry of result.files) {
-            const safeName = sanitizeFileName(entry.name)
-            const entryPath = currentDir ? `${currentDir}/${safeName}` : safeName
+            if (!isSafeEntryName(entry.name)) continue
+            const entryName = entry.name
+            const entryPath = currentDir ? `${currentDir}/${entryName}` : entryName
 
             if (entry.type === 'directory') {
               directoriesToScan.push(entryPath)
             } else {
               if (extensionSet) {
-                const ext = safeName.split('.').pop()?.toLowerCase()
+                const ext = entryName.split('.').pop()?.toLowerCase()
                 if (!ext || !extensionSet.has(ext)) {
                   continue
                 }
@@ -492,13 +494,13 @@ export class CapacitorAdapter implements OneFSAdapter {
 
               if (skipStats) {
                 files.push({
-                  name: safeName,
+                  name: entryName,
                   kind: 'file',
                   path: entryPath,
                 })
               } else {
                 files.push({
-                  name: safeName,
+                  name: entryName,
                   kind: 'file',
                   size: entry.size,
                   lastModified: entry.mtime ?? Date.now(),
@@ -787,8 +789,7 @@ export class CapacitorAdapter implements OneFSAdapter {
   }
 
   async renameFile(file: OneFSFile, newName: string): Promise<OneFSResult<OneFSFile>> {
-    const sanitized = sanitizeFileName(newName)
-    if (!sanitized) {
+    if (!isSafeEntryName(newName)) {
       return err('io_error', 'Invalid file name')
     }
 
@@ -796,7 +797,7 @@ export class CapacitorAdapter implements OneFSAdapter {
     if (!authorized.ok) return authorized
     const oldPath = authorized.data
     const parentDir = oldPath.includes('/') ? oldPath.substring(0, oldPath.lastIndexOf('/')) : ''
-    const newPath = parentDir ? `${parentDir}/${sanitized}` : sanitized
+    const newPath = parentDir ? `${parentDir}/${newName}` : newName
     if (!this.isSafeDocumentsPath(newPath)) {
       return err('io_error', 'Invalid file name')
     }
@@ -812,9 +813,9 @@ export class CapacitorAdapter implements OneFSAdapter {
 
       const updatedFile: OneFSFile = {
         ...file,
-        name: sanitized,
+        name: newName,
         path: newPath,
-        mimeType: getMimeType(sanitized),
+        mimeType: getMimeType(newName),
       }
 
       await this.storage.storeFile({

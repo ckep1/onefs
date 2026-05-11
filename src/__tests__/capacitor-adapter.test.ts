@@ -17,6 +17,35 @@ function makeFile(overrides: Partial<OneFSFile> = {}): OneFSFile {
 }
 
 describe('CapacitorAdapter security and root-path behavior', () => {
+  test('scanDirectory preserves real filenames containing repeated dots', async () => {
+    const adapter = new CapacitorAdapter('cap-scan-dots-' + Math.random().toString(36).slice(2))
+    const readdir = vi.fn().mockResolvedValue({
+      files: [
+        { name: 'Artist - Wait... What.mp3', type: 'file', size: 123, mtime: 456 },
+      ],
+    })
+
+    ;(adapter as any).loadFilesystem = vi.fn().mockResolvedValue({
+      Filesystem: { readdir },
+      Directory: { Documents: 'DOCUMENTS' },
+    })
+
+    const directory: OneFSDirectory = {
+      id: 'dir-id',
+      name: 'Documents',
+      path: '',
+    }
+
+    const result = await adapter.scanDirectory(directory, { extensions: ['.mp3'] })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data[0]).toMatchObject({
+        name: 'Artist - Wait... What.mp3',
+        path: 'Artist - Wait... What.mp3',
+      })
+    }
+  })
+
   test('readFileFromDirectory allows root-level files when directory path is empty', async () => {
     const adapter = new CapacitorAdapter('cap-root-read-' + Math.random().toString(36).slice(2))
     const readFile = vi.fn().mockResolvedValue({ data: btoa('abc') })
@@ -133,6 +162,51 @@ describe('CapacitorAdapter security and root-path behavior', () => {
     expect(result.ok).toBe(false)
     if (!result.ok) {
       expect(result.error.code).toBe('permission_denied')
+    }
+    expect(rename).not.toHaveBeenCalled()
+  })
+
+  test('renameFile preserves repeated-dot filenames verbatim (no sanitization)', async () => {
+    const adapter = new CapacitorAdapter('cap-rename-dots-' + Math.random().toString(36).slice(2))
+    const rename = vi.fn().mockResolvedValue(undefined)
+    const file = makeFile({ id: 'known-id', path: 'old.mp3' })
+
+    ;(adapter as any).loadFilesystem = vi.fn().mockResolvedValue({
+      Filesystem: { rename },
+      Directory: { Documents: 'DOCUMENTS' },
+    })
+    ;(adapter as any).storage.getStoredFile = vi.fn().mockResolvedValue({ path: file.path })
+    ;(adapter as any).storage.storeFile = vi.fn().mockResolvedValue(undefined)
+
+    const result = await adapter.renameFile(file, '...thinking.txt')
+
+    expect(result.ok).toBe(true)
+    expect(rename).toHaveBeenCalledWith(expect.objectContaining({
+      from: 'old.mp3',
+      to: '...thinking.txt',
+    }))
+    if (result.ok) {
+      expect(result.data.name).toBe('...thinking.txt')
+      expect(result.data.path).toBe('...thinking.txt')
+    }
+  })
+
+  test('renameFile rejects names containing separators', async () => {
+    const adapter = new CapacitorAdapter('cap-rename-unsafe-' + Math.random().toString(36).slice(2))
+    const rename = vi.fn().mockResolvedValue(undefined)
+    const file = makeFile({ id: 'known-id', path: 'old.mp3' })
+
+    ;(adapter as any).loadFilesystem = vi.fn().mockResolvedValue({
+      Filesystem: { rename },
+      Directory: { Documents: 'DOCUMENTS' },
+    })
+    ;(adapter as any).storage.getStoredFile = vi.fn().mockResolvedValue({ path: file.path })
+
+    const result = await adapter.renameFile(file, '../escape.txt')
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe('io_error')
     }
     expect(rename).not.toHaveBeenCalled()
   })

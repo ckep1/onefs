@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.4] - 2026-05-11
+
+### Fixed
+
+- Tauri and Capacitor `readDirectory`/`scanDirectory` now preserve real filenames containing repeated dots instead of sanitizing them into different names
+- Tauri and Capacitor directory scans now skip unsafe native entries (`/`, `\`, null byte, `.`, `..`) without altering valid filenames
+- Tauri and Capacitor `renameFile` now validate-and-reject unsafe names instead of silently stripping characters, so renaming to `...thinking.txt` no longer writes a different filename
+- Tauri `splitParentPath` now picks the separator from the dominant separator of the parent portion rather than the last separator character, avoiding malformed paths when both `/` and `\` appear
+
+### Added
+
+- `isSafeEntryName` validator in `src/utils.ts` plus a dedicated unit-test suite locking the accept/reject contract
+- Regression tests for Tauri and Capacitor scans with repeated-dot filenames, rename validator behavior, and mixed-separator path handling
+- ESLint dev tooling and config so `npm run lint` runs as part of release validation
+
+### Security
+
+- Bumped `vite` to ^7, `vite-plugin-dts` to ^5, and `vitest` to ^4 to clear advisories in their transitive deps (esbuild dev-server request leak, rollup path traversal, vite WebSocket file read, postcss XSS, minimatch/picomatch/brace-expansion ReDoS, lodash prototype pollution, ajv ReDoS)
+- Added `postcss`, `rollup`, and `picomatch` overrides to pin patched versions until vite/vitest publish updated lockfiles
+
 ## [0.6.3] - 2026-04-10
 
 ### Security

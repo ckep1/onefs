@@ -21,6 +21,30 @@ function makeAdapter(testName: string): TauriAdapter {
 }
 
 describe('TauriAdapter path safety and separator handling', () => {
+  test('scanDirectory preserves real filenames containing repeated dots', async () => {
+    const adapter = makeAdapter('scan-dots')
+    const readDir = vi.fn().mockResolvedValue([
+      { name: 'Artist - Wait... What.mp3', isFile: true, isDirectory: false },
+    ])
+
+    ;(adapter as any).loadModules = vi.fn().mockResolvedValue({
+      fs: { readDir },
+      dialog: {},
+      core: {},
+    })
+
+    const directory: OneFSDirectory = { id: 'dir-id', name: 'Music', path: '/Music' }
+    const result = await adapter.scanDirectory(directory, { extensions: ['.mp3'], skipStats: true })
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.data[0]).toMatchObject({
+        name: 'Artist - Wait... What.mp3',
+        path: '/Music/Artist - Wait... What.mp3',
+      })
+    }
+  })
+
   test('readDirectory keeps backslash separator for Windows paths', async () => {
     const adapter = makeAdapter('read-directory')
     const readDir = vi.fn().mockResolvedValue([
@@ -102,6 +126,75 @@ describe('TauriAdapter path safety and separator handling', () => {
     if (result.ok) {
       expect(result.data.path).toBe('C:\\Users\\chris\\renamed.mp3')
     }
+  })
+
+  test('renameFile preserves repeated-dot filenames verbatim (no sanitization)', async () => {
+    const adapter = makeAdapter('rename-dots')
+    const rename = vi.fn().mockResolvedValue(undefined)
+    const file = makeFile({ id: 'known-id', path: '/Music/old.mp3' })
+
+    ;(adapter as any).loadModules = vi.fn().mockResolvedValue({
+      fs: { rename },
+      dialog: {},
+      core: {},
+    })
+    ;(adapter as any).storage.getStoredFile = vi.fn().mockResolvedValue({ path: file.path })
+    ;(adapter as any).storage.storeFile = vi.fn().mockResolvedValue(undefined)
+
+    const result = await adapter.renameFile(file, '...thinking.txt')
+
+    expect(result.ok).toBe(true)
+    expect(rename).toHaveBeenCalledWith('/Music/old.mp3', '/Music/...thinking.txt')
+    if (result.ok) {
+      expect(result.data.name).toBe('...thinking.txt')
+      expect(result.data.path).toBe('/Music/...thinking.txt')
+    }
+  })
+
+  test('renameFile rejects names containing separators', async () => {
+    const adapter = makeAdapter('rename-unsafe')
+    const rename = vi.fn().mockResolvedValue(undefined)
+    const file = makeFile({ id: 'known-id', path: '/Music/old.mp3' })
+
+    ;(adapter as any).loadModules = vi.fn().mockResolvedValue({
+      fs: { rename },
+      dialog: {},
+      core: {},
+    })
+    ;(adapter as any).storage.getStoredFile = vi.fn().mockResolvedValue({ path: file.path })
+
+    const result = await adapter.renameFile(file, '../escape.txt')
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe('io_error')
+    }
+    expect(rename).not.toHaveBeenCalled()
+  })
+
+  test('renameFile picks dominant separator from parent for mixed-separator paths', async () => {
+    const adapter = makeAdapter('rename-mixed-sep')
+    const rename = vi.fn().mockResolvedValue(undefined)
+    const file = makeFile({
+      id: 'known-id',
+      path: 'C:\\Users\\chris\\Music/track.mp3',
+    })
+
+    ;(adapter as any).loadModules = vi.fn().mockResolvedValue({
+      fs: { rename },
+      dialog: {},
+      core: {},
+    })
+    ;(adapter as any).storage.getStoredFile = vi.fn().mockResolvedValue({ path: file.path })
+    ;(adapter as any).storage.storeFile = vi.fn().mockResolvedValue(undefined)
+
+    const result = await adapter.renameFile(file, 'renamed.mp3')
+
+    expect(result.ok).toBe(true)
+    expect(rename).toHaveBeenCalledWith(
+      'C:\\Users\\chris\\Music/track.mp3',
+      'C:\\Users\\chris\\Music\\renamed.mp3'
+    )
   })
 
   test('deleteFile rejects files not opened through this adapter', async () => {

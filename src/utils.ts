@@ -105,3 +105,14 @@ export function isPathWithin(child: string, parent: string): boolean {
 export function sanitizeFileName(name: string): string {
   return name.replace(/[/\\\0]/g, '').replace(/\.\./g, '')
 }
+
+export function isSafeEntryName(name: string): boolean {
+  return (
+    name.length > 0 &&
+    !name.includes('/') &&
+    !name.includes('\\') &&
+    !name.includes('\0') &&
+    name !== '.' &&
+    name !== '..'
+  )
+}

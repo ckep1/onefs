@@ -9,12 +9,11 @@ import type {
   OneFSScanOptions,
   OneFSEntry,
   StoredHandle,
-  StoredFile,
   OneFSResult,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, getFileName, sanitizeFileName, isPathWithin, normalizePath, toArrayBuffer } from '../utils'
+import { generateId, getMimeType, getFileName, isPathWithin, normalizePath, toArrayBuffer, isSafeEntryName } from '../utils'
 
 type TauriDialog = typeof import('@tauri-apps/plugin-dialog')
 type TauriFS = typeof import('@tauri-apps/plugin-fs')
@@ -83,9 +82,10 @@ export class TauriAdapter implements OneFSAdapter {
     const index = Math.max(forwardSlash, backwardSlash)
     if (index < 0) return null
 
+    const parent = path.slice(0, index)
     return {
-      parent: path.slice(0, index),
-      separator: path[index] === '\\' ? '\\' : '/',
+      parent,
+      separator: this.getPreferredSeparator(parent),
     }
   }
 
@@ -344,20 +344,21 @@ export class TauriAdapter implements OneFSAdapter {
       for (const entry of dirEntries) {
         if (!entry.name) continue
 
-        const safeName = sanitizeFileName(entry.name)
-        const filePath = this.joinPath(directory.path, safeName)
+        if (!isSafeEntryName(entry.name)) continue
+        const entryName = entry.name
+        const filePath = this.joinPath(directory.path, entryName)
 
         if (!isPathWithin(filePath, directory.path)) continue
 
         if (entry.isFile) {
           if (options.skipStats) {
-            entries.push({ name: safeName, kind: 'file', path: filePath })
+            entries.push({ name: entryName, kind: 'file', path: filePath })
           } else {
-            needsStat.push({ index: entries.length, name: safeName, path: filePath })
-            entries.push({ name: safeName, kind: 'file', path: filePath })
+            needsStat.push({ index: entries.length, name: entryName, path: filePath })
+            entries.push({ name: entryName, kind: 'file', path: filePath })
           }
         } else if (entry.isDirectory) {
-          entries.push({ name: safeName, kind: 'directory', path: filePath })
+          entries.push({ name: entryName, kind: 'directory', path: filePath })
         }
       }
 
@@ -483,8 +484,9 @@ export class TauriAdapter implements OneFSAdapter {
           for (const entry of dirEntries) {
             if (!entry.name) continue
 
-            const safeName = sanitizeFileName(entry.name)
-            const entryPath = this.joinPath(currentDir, safeName)
+            if (!isSafeEntryName(entry.name)) continue
+            const entryName = entry.name
+            const entryPath = this.joinPath(currentDir, entryName)
 
             if (!isPathWithin(entryPath, directory.path)) continue
 
@@ -492,14 +494,14 @@ export class TauriAdapter implements OneFSAdapter {
               directoriesToScan.push(entryPath)
             } else if (entry.isFile) {
               if (extensionSet) {
-                const ext = safeName.split('.').pop()?.toLowerCase()
+                const ext = entryName.split('.').pop()?.toLowerCase()
                 if (!ext || !extensionSet.has(ext)) continue
               }
 
               if (skipStats) {
-                files.push({ name: safeName, kind: 'file', path: entryPath })
+                files.push({ name: entryName, kind: 'file', path: entryPath })
               } else {
-                fileEntriesToStat.push({ name: safeName, path: entryPath })
+                fileEntriesToStat.push({ name: entryName, path: entryPath })
               }
             }
 
@@ -676,8 +678,7 @@ export class TauriAdapter implements OneFSAdapter {
   }
 
   async renameFile(file: OneFSFile, newName: string): Promise<OneFSResult<OneFSFile>> {
-    const sanitized = sanitizeFileName(newName)
-    if (!sanitized) {
+    if (!isSafeEntryName(newName)) {
       return err('io_error', 'Invalid file name')
     }
     const authorized = await this.resolveAuthorizedPath(file)
@@ -688,16 +689,16 @@ export class TauriAdapter implements OneFSAdapter {
       const { fs } = await this.loadModules()
       const parentPath = this.splitParentPath(oldPath)
       const newPath = parentPath
-        ? `${parentPath.parent}${parentPath.separator}${sanitized}`
-        : sanitized
+        ? `${parentPath.parent}${parentPath.separator}${newName}`
+        : newName
 
       await fs.rename(oldPath, newPath)
 
       const updatedFile: OneFSFile = {
         ...file,
-        name: sanitized,
+        name: newName,
         path: newPath,
-        mimeType: getMimeType(sanitized),
+        mimeType: getMimeType(newName),
       }
 
       await this.storage.storeFile({

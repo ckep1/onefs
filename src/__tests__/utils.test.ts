@@ -6,6 +6,7 @@ import {
   normalizePath,
   isPathWithin,
   sanitizeFileName,
+  isSafeEntryName,
   toArrayBuffer,
   uint8ArrayToBase64,
   base64ToUint8Array,
@@ -184,6 +185,61 @@ describe('sanitizeFileName', () => {
 
   test('multiple consecutive dots', () => {
     expect(sanitizeFileName('....test')).toBe('test')
+  })
+})
+
+describe('isSafeEntryName', () => {
+  test('rejects empty string', () => {
+    expect(isSafeEntryName('')).toBe(false)
+  })
+
+  test('rejects "."', () => {
+    expect(isSafeEntryName('.')).toBe(false)
+  })
+
+  test('rejects ".."', () => {
+    expect(isSafeEntryName('..')).toBe(false)
+  })
+
+  test('rejects names containing forward slash', () => {
+    expect(isSafeEntryName('foo/bar')).toBe(false)
+    expect(isSafeEntryName('/foo')).toBe(false)
+    expect(isSafeEntryName('foo/')).toBe(false)
+  })
+
+  test('rejects names containing backslash', () => {
+    expect(isSafeEntryName('foo\\bar')).toBe(false)
+    expect(isSafeEntryName('\\foo')).toBe(false)
+  })
+
+  test('rejects names containing null byte', () => {
+    expect(isSafeEntryName('foo\0bar')).toBe(false)
+  })
+
+  test('accepts names with leading double-dot (real filenames must round-trip)', () => {
+    expect(isSafeEntryName('..foo')).toBe(true)
+    expect(isSafeEntryName('...thinking.txt')).toBe(true)
+  })
+
+  test('accepts names with embedded repeated dots', () => {
+    expect(isSafeEntryName('Artist - Wait... What.mp3')).toBe(true)
+    expect(isSafeEntryName('a..b')).toBe(true)
+  })
+
+  test('accepts hidden files and trailing-dot names', () => {
+    expect(isSafeEntryName('.hidden')).toBe(true)
+    expect(isSafeEntryName('foo.')).toBe(true)
+  })
+
+  test('accepts Windows reserved names and drive-letter-like prefixes (validator is path-component scoped)', () => {
+    expect(isSafeEntryName('CON')).toBe(true)
+    expect(isSafeEntryName('NUL')).toBe(true)
+    expect(isSafeEntryName('C:foo')).toBe(true)
+  })
+
+  test('accepts normal filenames', () => {
+    expect(isSafeEntryName('file.txt')).toBe(true)
+    expect(isSafeEntryName('My Document (1).pdf')).toBe(true)
   })
 })
 
