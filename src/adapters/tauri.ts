@@ -587,7 +587,11 @@ export class TauriAdapter implements OneFSAdapter {
       return err('not_found', 'File not found in storage')
     }
 
-    if (file.path && file.mimeType !== DIRECTORY_MIME_TYPE) {
+    if (file.mimeType === DIRECTORY_MIME_TYPE) {
+      return err('not_found', 'Stored record is a directory - use restoreDirectory()')
+    }
+
+    if (file.path) {
       try {
         const { fs } = await this.loadModules()
         const content = await fs.readFile(file.path)
@@ -701,16 +705,12 @@ export class TauriAdapter implements OneFSAdapter {
         mimeType: getMimeType(newName),
       }
 
-      await this.storage.storeFile({
-        id: updatedFile.id,
-        name: updatedFile.name,
-        path: updatedFile.path,
-        content: updatedFile.content,
-        mimeType: updatedFile.mimeType,
-        size: updatedFile.size,
-        lastModified: updatedFile.lastModified,
-        storedAt: Date.now(),
-      })
+      // Update the stored record's metadata without rewriting cached content
+      // (the in-memory file.content may be stale). Best-effort: the disk
+      // rename already succeeded.
+      await this.storage
+        .updateFileMetadata(file.id, { name: newName, path: newPath, mimeType: updatedFile.mimeType })
+        .catch(() => {})
       this.registerSessionFile(updatedFile)
 
       return ok(updatedFile)

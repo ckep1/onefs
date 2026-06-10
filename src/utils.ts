@@ -106,6 +106,41 @@ export function sanitizeFileName(name: string): string {
   return name.replace(/[/\\\0]/g, '').replace(/\.\./g, '')
 }
 
+/**
+ * Open a hidden <input type="file"> picker. Resolves with the selected files,
+ * or null when the user cancels. Uses the input `cancel` event where available,
+ * with a window-focus fallback for browsers without it (pre-16.4 Safari) so the
+ * promise cannot hang forever on cancel. Must be called from a user gesture.
+ */
+export function pickFilesViaInput(options: { accept?: string; multiple?: boolean }): Promise<FileList | null> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    if (options.accept) input.accept = options.accept
+    input.multiple = options.multiple ?? false
+
+    let settled = false
+    const finish = (files: FileList | null) => {
+      if (settled) return
+      settled = true
+      window.removeEventListener('focus', onFocus)
+      resolve(files)
+    }
+    const onFocus = () => {
+      // The change event can arrive after focus returns from the picker
+      setTimeout(() => finish(input.files?.length ? input.files : null), 1000)
+    }
+
+    input.onchange = () => finish(input.files?.length ? input.files : null)
+    if ('oncancel' in input) {
+      input.oncancel = () => finish(null)
+    } else {
+      window.addEventListener('focus', onFocus)
+    }
+    input.click()
+  })
+}
+
 export function isSafeEntryName(name: string): boolean {
   return (
     name.length > 0 &&

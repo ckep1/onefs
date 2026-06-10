@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.5] - 2026-06-09
+
+### Fixed
+
+- Capacitor: cancelling the native file picker no longer falls through to a second HTML input picker; plugin-missing and user-cancel are now distinguished, and cancellation returns a `cancelled` result
+- Adapter selection no longer crashes in Node/SSR environments: `FSAccessAdapter.isSupported()` now guards `typeof window`, so `createOneFS` falls back gracefully instead of throwing `ReferenceError`
+- Capacitor: pruning the recent-files list now also deletes the backing copies in the Documents directory, which previously accumulated as orphans that the library could no longer reach or delete
+- Files larger than the cache limit now keep their metadata record (with content omitted) when they have a path, so rename/save/restore keep working for large files on Tauri and Capacitor; pathless oversize files are still skipped
+- Capacitor `resolveAuthorizedPath` now checks session paths before stored records (matching Tauri), so renaming a file whose stored record lags no longer blocks subsequent `saveFile`/`deleteFile` in the same session
+- Tauri and Capacitor `renameFile` now update stored metadata in place instead of rewriting the record from the caller's in-memory file, which could overwrite newer saved content with a stale copy
+- Tauri `restoreFile` now returns `not_found` for directory records instead of a zero-byte file
+- web-fs-access `renameFile` now validates-and-rejects unsafe names via `isSafeEntryName` (matching Tauri/Capacitor) instead of silently mangling them with `sanitizeFileName`, and refreshes the persisted handle metadata after a rename
+- Fallback file pickers (web-fallback and Capacitor HTML input) now detect cancellation via a window-focus fallback on browsers without the input `cancel` event (pre-16.4 Safari), so the returned promise can no longer hang forever
+- IndexedDB connection opening is now memoized, preventing duplicate connections from concurrent first calls
+
+### Added
+
+- `IDBStorage.updateFileMetadata()` for content-preserving metadata updates
+- `IDBStorage.onFilesPruned` callback so adapters can clean up resources backing evicted records
+- `pickFilesViaInput()` shared helper consolidating the HTML input picker used by the web-fallback and Capacitor adapters
+- Regression tests for all of the above plus a node-environment suite asserting SSR safety
+
 ## [0.6.4] - 2026-05-11
 
 ### Fixed

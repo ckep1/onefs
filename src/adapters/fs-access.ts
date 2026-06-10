@@ -14,7 +14,7 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, sanitizeFileName, toArrayBuffer } from '../utils'
+import { generateId, getMimeType, isSafeEntryName, toArrayBuffer } from '../utils'
 
 function buildAcceptTypes(accept?: string[]): FilePickerAcceptType[] {
   if (!accept || accept.length === 0) return []
@@ -47,7 +47,7 @@ export class FSAccessAdapter implements OneFSAdapter {
   }
 
   isSupported(): boolean {
-    return 'showOpenFilePicker' in window
+    return typeof window !== 'undefined' && 'showOpenFilePicker' in window
   }
 
   async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
@@ -500,8 +500,7 @@ export class FSAccessAdapter implements OneFSAdapter {
       return err('not_supported', 'Cannot rename file without handle')
     }
 
-    const sanitized = sanitizeFileName(newName)
-    if (!sanitized) {
+    if (!isSafeEntryName(newName)) {
       return err('io_error', 'Invalid file name')
     }
 
@@ -514,11 +513,17 @@ export class FSAccessAdapter implements OneFSAdapter {
         }
       }
 
-      await file.handle.move(sanitized)
+      await file.handle.move(newName)
+
+      // Refresh stored metadata (name) if this handle was persisted
+      await this.storage.getHandleObject(file.id)
+        .then((existing) => (existing ? this.storage.storeHandle(file.handle!, file.id) : null))
+        .catch(() => {})
+
       const updatedFile: OneFSFile = {
         ...file,
-        name: sanitized,
-        mimeType: getMimeType(sanitized),
+        name: newName,
+        mimeType: getMimeType(newName),
       }
       return ok(updatedFile)
     } catch (e) {

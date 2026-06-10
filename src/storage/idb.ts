@@ -6,8 +6,11 @@ const PRUNE_BUFFER = 5
 export class IDBStorage {
   private dbName: string
   private db: IDBDatabase | null = null
+  private dbPromise: Promise<IDBDatabase> | null = null
   private maxRecentFiles: number
   private maxCacheSize: number
+  /** Called with the records evicted by pruning, so adapters can clean up backing resources */
+  onFilesPruned?: (files: StoredFile[]) => void
 
   constructor(appName: string, maxRecentFiles = 10, maxCacheSize = 50 * 1024 * 1024) {
     if (!appName || !/^[\w.\-]+$/.test(appName)) {
@@ -18,13 +21,16 @@ export class IDBStorage {
     this.maxCacheSize = maxCacheSize
   }
 
-  private async getDB(): Promise<IDBDatabase> {
-    if (this.db) return this.db
+  private getDB(): Promise<IDBDatabase> {
+    if (this.dbPromise) return this.dbPromise
 
-    return new Promise((resolve, reject) => {
+    this.dbPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, DB_VERSION)
 
-      request.onerror = () => reject(request.error)
+      request.onerror = () => {
+        this.dbPromise = null
+        reject(request.error)
+      }
       request.onsuccess = () => {
         this.db = request.result
         resolve(this.db)
@@ -52,6 +58,7 @@ export class IDBStorage {
         }
       }
     })
+    return this.dbPromise
   }
 
   async storeHandle(
@@ -166,7 +173,14 @@ export class IDBStorage {
   }
 
   async storeFile(file: StoredFile): Promise<void> {
-    if (file.content.byteLength > this.maxCacheSize) return
+    let toStore = file
+    if (file.content.byteLength > this.maxCacheSize) {
+      // Too large to cache. With a path the metadata record is still kept
+      // (content is re-read from disk on restore); without one there is
+      // nothing to restore from, so skip entirely.
+      if (!file.path) return
+      toStore = { ...file, content: new Uint8Array(0) }
+    }
 
     const db = await this.getDB()
 
@@ -175,12 +189,34 @@ export class IDBStorage {
       tx.onerror = () => reject(tx.error)
 
       const store = tx.objectStore('files')
-      store.put(file)
+      store.put(toStore)
 
       tx.oncomplete = () => {
         this.pruneOldFiles().catch(() => {})
         resolve()
       }
+    })
+  }
+
+  /**
+   * Update name/path/mimeType on an existing record without touching its
+   * cached content. No-op (returns false) when the record does not exist.
+   */
+  async updateFileMetadata(
+    id: string,
+    updates: { name?: string; path?: string; mimeType?: string }
+  ): Promise<boolean> {
+    const existing = await this.getStoredFile(id)
+    if (!existing) return false
+
+    const db = await this.getDB()
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('files', 'readwrite')
+      tx.onerror = () => reject(tx.error)
+
+      tx.objectStore('files').put({ ...existing, ...updates, storedAt: Date.now() })
+
+      tx.oncomplete = () => resolve(true)
     })
   }
 
@@ -261,6 +297,9 @@ export class IDBStorage {
       tx.oncomplete = () => resolve()
       tx.onerror = () => reject(tx.error)
     })
+    if (toRemove.length > 0) {
+      this.onFilesPruned?.(toRemove)
+    }
   }
 
   async setNamedHandle(
@@ -330,5 +369,6 @@ export class IDBStorage {
       this.db.close()
       this.db = null
     }
+    this.dbPromise = null
   }
 }

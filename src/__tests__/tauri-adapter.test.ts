@@ -104,7 +104,7 @@ describe('TauriAdapter path safety and separator handling', () => {
   test('renameFile preserves Windows separator and parent directory', async () => {
     const adapter = makeAdapter('rename-windows')
     const rename = vi.fn().mockResolvedValue(undefined)
-    const storeFile = vi.fn().mockResolvedValue(undefined)
+    const updateFileMetadata = vi.fn().mockResolvedValue(true)
     const file = makeFile({
       id: 'known-id',
       name: 'track.mp3',
@@ -117,12 +117,16 @@ describe('TauriAdapter path safety and separator handling', () => {
       core: {},
     })
     ;(adapter as any).storage.getStoredFile = vi.fn().mockResolvedValue({ path: file.path })
-    ;(adapter as any).storage.storeFile = storeFile
+    ;(adapter as any).storage.updateFileMetadata = updateFileMetadata
 
     const result = await adapter.renameFile(file, 'renamed.mp3')
 
     expect(result.ok).toBe(true)
     expect(rename).toHaveBeenCalledWith('C:\\Users\\chris\\track.mp3', 'C:\\Users\\chris\\renamed.mp3')
+    expect(updateFileMetadata).toHaveBeenCalledWith('known-id', expect.objectContaining({
+      name: 'renamed.mp3',
+      path: 'C:\\Users\\chris\\renamed.mp3',
+    }))
     if (result.ok) {
       expect(result.data.path).toBe('C:\\Users\\chris\\renamed.mp3')
     }
@@ -139,7 +143,7 @@ describe('TauriAdapter path safety and separator handling', () => {
       core: {},
     })
     ;(adapter as any).storage.getStoredFile = vi.fn().mockResolvedValue({ path: file.path })
-    ;(adapter as any).storage.storeFile = vi.fn().mockResolvedValue(undefined)
+    ;(adapter as any).storage.updateFileMetadata = vi.fn().mockResolvedValue(true)
 
     const result = await adapter.renameFile(file, '...thinking.txt')
 
@@ -186,7 +190,7 @@ describe('TauriAdapter path safety and separator handling', () => {
       core: {},
     })
     ;(adapter as any).storage.getStoredFile = vi.fn().mockResolvedValue({ path: file.path })
-    ;(adapter as any).storage.storeFile = vi.fn().mockResolvedValue(undefined)
+    ;(adapter as any).storage.updateFileMetadata = vi.fn().mockResolvedValue(true)
 
     const result = await adapter.renameFile(file, 'renamed.mp3')
 

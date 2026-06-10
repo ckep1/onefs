@@ -9,11 +9,12 @@ import type {
   OneFSScanOptions,
   OneFSEntry,
   StoredHandle,
+  StoredFile,
   OneFSResult,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, base64ToUint8Array, uint8ArrayToBase64, toArrayBuffer, sanitizeFileName, isPathWithin, isSafeEntryName } from '../utils'
+import { generateId, getMimeType, base64ToUint8Array, uint8ArrayToBase64, toArrayBuffer, sanitizeFileName, isPathWithin, isSafeEntryName, pickFilesViaInput } from '../utils'
 
 type CapacitorFilesystem = typeof import('@capacitor/filesystem')
 type CapacitorCore = typeof import('@capacitor/core')
@@ -49,6 +50,9 @@ export class CapacitorAdapter implements OneFSAdapter {
 
   constructor(appName: string, maxRecentFiles = 10, persistByDefault = true) {
     this.storage = new IDBStorage(appName, maxRecentFiles)
+    this.storage.onFilesPruned = (files) => {
+      void this.removePrunedCopies(files)
+    }
     this.persistByDefault = persistByDefault
   }
 
@@ -56,6 +60,22 @@ export class CapacitorAdapter implements OneFSAdapter {
     if (typeof window === 'undefined') return false
     const cap = (window as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor
     return cap?.isNativePlatform?.() ?? false
+  }
+
+  /**
+   * Delete the Documents copies backing pruned records so they don't
+   * accumulate as orphans on disk.
+   */
+  private async removePrunedCopies(files: StoredFile[]): Promise<void> {
+    try {
+      const { Filesystem, Directory } = await this.loadFilesystem()
+      for (const f of files) {
+        if (!f.path || f.mimeType === DIRECTORY_MIME_TYPE || !this.isSafeDocumentsPath(f.path)) continue
+        await Filesystem.deleteFile({ path: f.path, directory: Directory.Documents }).catch(() => {})
+      }
+    } catch {
+      // Filesystem module unavailable
+    }
   }
 
   private async loadFilesystem(): Promise<CapacitorFilesystem> {
@@ -102,17 +122,16 @@ export class CapacitorAdapter implements OneFSAdapter {
       return err('permission_denied', 'Invalid file path')
     }
 
+    // Session paths first: after a rename the stored record can lag behind
+    // (metadata updates are best-effort), but the session map is authoritative
+    const livePath = this.sessionPaths.get(file.id)
+    if (livePath === requestedPath) {
+      return ok(requestedPath)
+    }
+
     try {
       const stored = await this.storage.getStoredFile(file.id)
-      if (stored?.path) {
-        if (stored.path !== requestedPath) {
-          return err('permission_denied', 'File path does not match stored record')
-        }
-        return ok(requestedPath)
-      }
-
-      const livePath = this.sessionPaths.get(file.id)
-      if (livePath === requestedPath) {
+      if (stored?.path === requestedPath) {
         return ok(requestedPath)
       }
 
@@ -125,30 +144,39 @@ export class CapacitorAdapter implements OneFSAdapter {
   async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
-    try {
-      const files = await this.pickFilesWithPlugin(options)
-      if (files) {
-        for (const file of files) {
-          this.registerSessionFile(file)
-        }
+    const pluginResult = await this.pickFilesWithPlugin(options)
+    if (pluginResult) {
+      if (!pluginResult.ok) return pluginResult
+      const files = pluginResult.data
+      for (const file of files) {
+        this.registerSessionFile(file)
         if (shouldPersist) {
-          for (const file of files) {
-            this.storage.storeFileDeferred({ ...file, storedAt: Date.now() })
-          }
+          this.storage.storeFileDeferred({ ...file, storedAt: Date.now() })
         }
-        return ok(options.multiple ? files : files[0])
       }
-    } catch {
-      // Plugin not available, fall through to HTML input
+      return ok(options.multiple ? files : files[0])
     }
 
     return this.pickFilesWithInput(options, shouldPersist)
   }
 
-  private async pickFilesWithPlugin(options: OneFSOpenOptions): Promise<OneFSFile[] | null> {
+  /**
+   * Pick via @capawesome/capacitor-file-picker. Returns null only when the
+   * plugin is not installed; once the picker has run, errors (including user
+   * cancellation) are returned as results rather than falling back to the
+   * HTML input, which would open a second picker.
+   */
+  private async pickFilesWithPlugin(options: OneFSOpenOptions): Promise<OneFSResult<OneFSFile[]> | null> {
+    let FilePicker: FilePicker
     try {
       const module = await import('@capawesome/capacitor-file-picker' as string) as { FilePicker: FilePicker }
-      const { FilePicker } = module
+      FilePicker = module.FilePicker
+      if (!FilePicker) return null
+    } catch {
+      return null
+    }
+
+    try {
       const { Filesystem, Directory } = await this.loadFilesystem()
 
       const types = options.accept
@@ -161,12 +189,15 @@ export class CapacitorAdapter implements OneFSAdapter {
         readData: false,
       })
 
+      if (result.files.length === 0) {
+        return err('cancelled', 'No files selected')
+      }
+
       const fileResults = await Promise.all(
         result.files.map(async (picked) => {
           const id = generateId()
           const safeName = sanitizeFileName(picked.name)
-          const destName = `${id}_${safeName}`
-          const destPath = destName
+          const destPath = `${id}_${safeName}`
 
           const fileData = await Filesystem.readFile({ path: picked.path! })
           await Filesystem.writeFile({
@@ -191,81 +222,74 @@ export class CapacitorAdapter implements OneFSAdapter {
         })
       )
 
-      return fileResults.length > 0 ? fileResults : null
-    } catch {
-      return null
+      return ok(fileResults)
+    } catch (e) {
+      const error = e as Error
+      if (error.message?.toLowerCase().includes('cancel')) {
+        return err('cancelled', 'User cancelled file picker')
+      }
+      return err('io_error', error.message || 'Failed to open file', e)
     }
   }
 
-  private pickFilesWithInput(
+  private async pickFilesWithInput(
     options: OneFSOpenOptions,
     shouldPersist: boolean
   ): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
-    const accept = options.accept?.join(',') ?? '*/*'
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = accept
-    input.multiple = options.multiple ?? false
+    const fileList = await pickFilesViaInput({
+      accept: options.accept?.join(',') ?? '*/*',
+      multiple: options.multiple ?? false,
+    })
+    if (!fileList) {
+      return err('cancelled', 'User cancelled file picker')
+    }
 
-    return new Promise((resolve) => {
-      input.onchange = async () => {
-        const fileList = input.files
-        if (!fileList || fileList.length === 0) {
-          resolve(err('cancelled', 'No files selected'))
-          return
+    try {
+      const { Filesystem, Directory } = await this.loadFilesystem()
+
+      const results = await Promise.all(
+        Array.from(fileList).map(async (file) => {
+          const content = new Uint8Array(await file.arrayBuffer())
+          return { file, content }
+        })
+      )
+
+      const filesOut: OneFSFile[] = []
+
+      for (const { file, content } of results) {
+        const id = generateId()
+        const safeName = sanitizeFileName(file.name)
+        const destPath = `${id}_${safeName}`
+
+        await Filesystem.writeFile({
+          path: destPath,
+          data: uint8ArrayToBase64(content),
+          directory: Directory.Documents,
+        })
+
+        const onefsFile: OneFSFile = {
+          id,
+          name: file.name,
+          path: destPath,
+          content,
+          mimeType: file.type || getMimeType(file.name),
+          size: content.byteLength,
+          lastModified: file.lastModified,
         }
 
-        try {
-          const { Filesystem, Directory } = await this.loadFilesystem()
-
-          const results = await Promise.all(
-            Array.from(fileList).map(async (file) => {
-              const content = new Uint8Array(await file.arrayBuffer())
-              return { file, content }
-            })
-          )
-
-          const filesOut: OneFSFile[] = []
-
-          for (const { file, content } of results) {
-            const id = generateId()
-            const safeName = sanitizeFileName(file.name)
-            const destPath = `${id}_${safeName}`
-
-            await Filesystem.writeFile({
-              path: destPath,
-              data: uint8ArrayToBase64(content),
-              directory: Directory.Documents,
-            })
-
-            const onefsFile: OneFSFile = {
-              id,
-              name: file.name,
-              path: destPath,
-              content,
-              mimeType: file.type || getMimeType(file.name),
-              size: content.byteLength,
-              lastModified: file.lastModified,
-            }
-
-            if (shouldPersist) {
-              this.storage.storeFileDeferred({ ...onefsFile, storedAt: Date.now() })
-            }
-            this.registerSessionFile(onefsFile)
-
-            filesOut.push(onefsFile)
-          }
-
-          resolve(ok(options.multiple ? filesOut : filesOut[0]))
-        } catch (e) {
-          const error = e as Error
-          resolve(err('io_error', error.message || 'Failed to read file', e))
+        if (shouldPersist) {
+          this.storage.storeFileDeferred({ ...onefsFile, storedAt: Date.now() })
         }
+        this.registerSessionFile(onefsFile)
+
+        filesOut.push(onefsFile)
       }
 
-      input.oncancel = () => resolve(err('cancelled', 'User cancelled file picker'))
-      input.click()
-    })
+      return ok(options.multiple ? filesOut : filesOut[0])
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to read file', e)
+    }
   }
 
   async saveFile(
@@ -818,16 +842,12 @@ export class CapacitorAdapter implements OneFSAdapter {
         mimeType: getMimeType(newName),
       }
 
-      await this.storage.storeFile({
-        id: updatedFile.id,
-        name: updatedFile.name,
-        path: updatedFile.path,
-        content: updatedFile.content,
-        mimeType: updatedFile.mimeType,
-        size: updatedFile.size,
-        lastModified: updatedFile.lastModified,
-        storedAt: Date.now(),
-      })
+      // Update the stored record's metadata without rewriting cached content
+      // (the in-memory file.content may be stale). Best-effort: the disk
+      // rename already succeeded.
+      await this.storage
+        .updateFileMetadata(file.id, { name: newName, path: newPath, mimeType: updatedFile.mimeType })
+        .catch(() => {})
       this.registerSessionFile(updatedFile)
 
       return ok(updatedFile)

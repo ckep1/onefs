@@ -176,7 +176,7 @@ describe('CapacitorAdapter security and root-path behavior', () => {
       Directory: { Documents: 'DOCUMENTS' },
     })
     ;(adapter as any).storage.getStoredFile = vi.fn().mockResolvedValue({ path: file.path })
-    ;(adapter as any).storage.storeFile = vi.fn().mockResolvedValue(undefined)
+    ;(adapter as any).storage.updateFileMetadata = vi.fn().mockResolvedValue(true)
 
     const result = await adapter.renameFile(file, '...thinking.txt')
 

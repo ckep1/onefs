@@ -9,7 +9,7 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, toArrayBuffer, sanitizeFileName } from '../utils'
+import { generateId, getMimeType, toArrayBuffer, sanitizeFileName, pickFilesViaInput } from '../utils'
 
 /**
  * Fallback adapter for browsers without File System Access API.
@@ -35,65 +35,52 @@ export class PickerIDBAdapter implements OneFSAdapter {
   async openFile(options: OneFSOpenOptions = {}): Promise<OneFSResult<OneFSFile | OneFSFile[]>> {
     const shouldPersist = options.persist ?? this.persistByDefault
 
-    return new Promise((resolve) => {
-      const input = document.createElement('input')
-      input.type = 'file'
-      input.multiple = options.multiple ?? false
-
-      if (options.accept?.length) {
-        input.accept = options.accept.join(',')
-      }
-
-      input.onchange = async () => {
-        const fileList = input.files
-        if (!fileList || fileList.length === 0) {
-          resolve(err('cancelled', 'No files selected'))
-          return
-        }
-
-        try {
-          const results = await Promise.all(
-            Array.from(fileList).map(async (file) => {
-              const content = new Uint8Array(await file.arrayBuffer())
-              return { file, content }
-            })
-          )
-
-          const files: OneFSFile[] = results.map(({ file, content }) => {
-            const id = generateId()
-
-            if (shouldPersist) {
-              this.storage.storeFileDeferred({
-                id,
-                name: file.name,
-                content,
-                mimeType: file.type || getMimeType(file.name),
-                size: content.byteLength,
-                lastModified: file.lastModified,
-                storedAt: Date.now(),
-              })
-            }
-
-            return {
-              id,
-              name: file.name,
-              content,
-              mimeType: file.type || getMimeType(file.name),
-              size: content.byteLength,
-              lastModified: file.lastModified,
-            }
-          })
-
-          resolve(ok(options.multiple ? files : files[0]))
-        } catch (e) {
-          const error = e as Error
-          resolve(err('io_error', error.message || 'Failed to read file', e))
-        }
-      }
-
-      input.oncancel = () => resolve(err('cancelled', 'User cancelled file picker'))
-      input.click()
+    const fileList = await pickFilesViaInput({
+      accept: options.accept?.length ? options.accept.join(',') : undefined,
+      multiple: options.multiple ?? false,
     })
+    if (!fileList) {
+      return err('cancelled', 'User cancelled file picker')
+    }
+
+    try {
+      const results = await Promise.all(
+        Array.from(fileList).map(async (file) => {
+          const content = new Uint8Array(await file.arrayBuffer())
+          return { file, content }
+        })
+      )
+
+      const files: OneFSFile[] = results.map(({ file, content }) => {
+        const id = generateId()
+
+        if (shouldPersist) {
+          this.storage.storeFileDeferred({
+            id,
+            name: file.name,
+            content,
+            mimeType: file.type || getMimeType(file.name),
+            size: content.byteLength,
+            lastModified: file.lastModified,
+            storedAt: Date.now(),
+          })
+        }
+
+        return {
+          id,
+          name: file.name,
+          content,
+          mimeType: file.type || getMimeType(file.name),
+          size: content.byteLength,
+          lastModified: file.lastModified,
+        }
+      })
+
+      return ok(options.multiple ? files : files[0])
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to read file', e)
+    }
   }
 
   /**
