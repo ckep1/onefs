@@ -8,13 +8,15 @@ import type {
   OneFSReadDirectoryOptions,
   OneFSScanOptions,
   OneFSEntry,
+  OneFSReadRangeOptions,
+  OneFSFileRange,
   StoredHandle,
   StoredFile,
   OneFSResult,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, base64ToUint8Array, uint8ArrayToBase64, toArrayBuffer, sanitizeFileName, isPathWithin, isSafeEntryName, pickFilesViaInput } from '../utils'
+import { generateId, getMimeType, base64ToUint8Array, uint8ArrayToBase64, toArrayBuffer, sanitizeFileName, isPathWithin, isSafeEntryName, pickFilesViaInput, invalidRangeReason, parseContentRangeSize } from '../utils'
 
 type CapacitorFilesystem = typeof import('@capacitor/filesystem')
 type CapacitorCore = typeof import('@capacitor/core')
@@ -564,11 +566,11 @@ export class CapacitorAdapter implements OneFSAdapter {
     }
   }
 
-  async readFileFromDirectory(
-    directory: OneFSDirectory,
-    entry: OneFSEntry,
-    options?: { maxBytes?: number }
-  ): Promise<OneFSResult<OneFSFile>> {
+  /**
+   * Validate that an entry can be read: it must be a file, sit inside the
+   * Documents sandbox, and stay within the directory it was listed from.
+   */
+  private resolveEntryPath(directory: OneFSDirectory, entry: OneFSEntry): OneFSResult<string> {
     if (!entry.path || entry.kind !== 'file') {
       return err('not_supported', 'Cannot read file without path')
     }
@@ -581,16 +583,50 @@ export class CapacitorAdapter implements OneFSAdapter {
       return err('permission_denied', 'Path is outside the expected directory')
     }
 
+    return ok(entry.path)
+  }
+
+  /**
+   * Resolve a Documents-relative path to a URL the webview can fetch.
+   */
+  private async getNativeUrl(path: string): Promise<string> {
+    const { Filesystem, Directory } = await this.loadFilesystem()
+    const { Capacitor } = await this.loadCore()
+
+    const uri = await Filesystem.getUri({ path, directory: Directory.Documents })
+    return Capacitor.convertFileSrc(uri.uri)
+  }
+
+  /**
+   * Stream a file's bytes through the webview instead of the base64 Filesystem
+   * bridge, which costs roughly 4x the file size in transient memory. Returns
+   * null when the webview route is unavailable (no `fetch`, no asset server)
+   * so callers can fall back to `Filesystem.readFile`.
+   */
+  private async fetchFileBytes(path: string): Promise<Uint8Array | null> {
+    try {
+      const response = await fetch(await this.getNativeUrl(path))
+      if (!response.ok) return null
+      return new Uint8Array(await response.arrayBuffer())
+    } catch {
+      return null
+    }
+  }
+
+  async readFileFromDirectory(
+    directory: OneFSDirectory,
+    entry: OneFSEntry,
+    options?: { maxBytes?: number }
+  ): Promise<OneFSResult<OneFSFile>> {
+    const resolved = this.resolveEntryPath(directory, entry)
+    if (!resolved.ok) return resolved
+    const path = resolved.data
+
     try {
       const { Filesystem, Directory } = await this.loadFilesystem()
-      const { Capacitor } = await this.loadCore()
 
       if (options?.maxBytes && entry.size && entry.size > options.maxBytes) {
-        const uri = await Filesystem.getUri({
-          path: entry.path,
-          directory: Directory.Documents,
-        })
-        const nativeUrl = Capacitor.convertFileSrc(uri.uri)
+        const nativeUrl = await this.getNativeUrl(path)
 
         const response = await fetch(nativeUrl, {
           headers: { Range: `bytes=0-${options.maxBytes - 1}` }
@@ -602,7 +638,7 @@ export class CapacitorAdapter implements OneFSAdapter {
           const partialFile: OneFSFile = {
             id: generateId(),
             name: entry.name,
-            path: entry.path,
+            path,
             content,
             mimeType: getMimeType(entry.name),
             size: content.byteLength,
@@ -614,22 +650,23 @@ export class CapacitorAdapter implements OneFSAdapter {
         }
       }
 
-      const fileData = await Filesystem.readFile({
-        path: entry.path,
-        directory: Directory.Documents,
-      })
+      let content = await this.fetchFileBytes(path)
 
-      let content: Uint8Array
-      if (fileData.data instanceof Blob) {
-        content = new Uint8Array(await fileData.data.arrayBuffer())
-      } else {
-        content = base64ToUint8Array(fileData.data as string)
+      if (!content) {
+        const fileData = await Filesystem.readFile({
+          path,
+          directory: Directory.Documents,
+        })
+
+        content = fileData.data instanceof Blob
+          ? new Uint8Array(await fileData.data.arrayBuffer())
+          : base64ToUint8Array(fileData.data as string)
       }
 
       const loadedFile: OneFSFile = {
         id: generateId(),
         name: entry.name,
-        path: entry.path,
+        path,
         content,
         mimeType: getMimeType(entry.name),
         size: content.byteLength,
@@ -647,6 +684,65 @@ export class CapacitorAdapter implements OneFSAdapter {
         return err('permission_denied', 'Permission denied to read file', e)
       }
       return err('io_error', error.message || 'Failed to read file', e)
+    }
+  }
+
+  /**
+   * Read a byte window over the webview's asset server, so only the requested
+   * bytes cross the bridge. There is no base64 fallback here on purpose: that
+   * path would read the entire file, which is what this API exists to avoid.
+   */
+  async readFileRange(
+    directory: OneFSDirectory,
+    entry: OneFSEntry,
+    options: OneFSReadRangeOptions
+  ): Promise<OneFSResult<OneFSFileRange>> {
+    const resolved = this.resolveEntryPath(directory, entry)
+    if (!resolved.ok) return resolved
+
+    const invalid = invalidRangeReason(options.position, options.length)
+    if (invalid) return err('io_error', `Invalid range: ${invalid}`)
+
+    if (options.length === 0) {
+      return ok({ content: new Uint8Array(0) })
+    }
+
+    try {
+      const nativeUrl = await this.getNativeUrl(resolved.data)
+      const end = options.position + options.length - 1
+
+      const response = await fetch(nativeUrl, {
+        headers: { Range: `bytes=${options.position}-${end}` },
+      })
+
+      if (response.status === 206) {
+        const content = new Uint8Array(await response.arrayBuffer())
+        return ok({ content, fileSize: parseContentRangeSize(response.headers?.get('Content-Range')) })
+      }
+
+      // Requested range starts past EOF
+      if (response.status === 416) {
+        return ok({ content: new Uint8Array(0) })
+      }
+
+      if (response.ok) {
+        // Range header ignored - slice the window out of the full body.
+        // Correctness over efficiency; the whole file crossed the bridge.
+        const body = new Uint8Array(await response.arrayBuffer())
+        return ok({
+          content: body.slice(options.position, options.position + options.length),
+          fileSize: body.byteLength,
+        })
+      }
+
+      if (response.status === 404) {
+        return err('not_found', 'File not found')
+      }
+
+      return err('io_error', `Failed to read range (HTTP ${response.status})`)
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to read range', e)
     }
   }
 

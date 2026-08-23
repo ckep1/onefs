@@ -7,6 +7,8 @@ import type {
   OneFSDirectoryOptions,
   OneFSReadDirectoryOptions,
   OneFSEntry,
+  OneFSReadRangeOptions,
+  OneFSFileRange,
   StoredHandle,
   OneFSResult,
   PermissionMode,
@@ -14,7 +16,7 @@ import type {
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, isSafeEntryName, toArrayBuffer } from '../utils'
+import { generateId, getMimeType, isSafeEntryName, toArrayBuffer, invalidRangeReason } from '../utils'
 
 function buildAcceptTypes(accept?: string[]): FilePickerAcceptType[] {
   if (!accept || accept.length === 0) return []
@@ -303,6 +305,41 @@ export class FSAccessAdapter implements OneFSAdapter {
         return err('permission_denied', 'Permission denied to read file', e)
       }
       return err('io_error', error.message || 'Failed to read file', e)
+    }
+  }
+
+  /**
+   * Read a byte window by slicing the underlying File. Blob slices are lazy,
+   * so only the requested bytes are pulled off disk.
+   */
+  async readFileRange(
+    _directory: OneFSDirectory,
+    entry: OneFSEntry,
+    options: OneFSReadRangeOptions
+  ): Promise<OneFSResult<OneFSFileRange>> {
+    if (!entry.handle || entry.kind !== 'file') {
+      return err('not_supported', 'Cannot read file without handle')
+    }
+
+    const invalid = invalidRangeReason(options.position, options.length)
+    if (invalid) return err('io_error', `Invalid range: ${invalid}`)
+
+    try {
+      const file = await (entry.handle as FileSystemFileHandle).getFile()
+      const start = Math.min(options.position, file.size)
+      const end = Math.min(start + options.length, file.size)
+      const content = new Uint8Array(await file.slice(start, end).arrayBuffer())
+
+      return ok({ content, fileSize: file.size })
+    } catch (e) {
+      const error = e as Error
+      if (error.name === 'NotFoundError') {
+        return err('not_found', 'File no longer exists', e)
+      }
+      if (error.name === 'SecurityError' || error.name === 'NotAllowedError') {
+        return err('permission_denied', 'Permission denied to read file', e)
+      }
+      return err('io_error', error.message || 'Failed to read range', e)
     }
   }
 

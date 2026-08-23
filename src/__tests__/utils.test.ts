@@ -10,6 +10,8 @@ import {
   toArrayBuffer,
   uint8ArrayToBase64,
   base64ToUint8Array,
+  invalidRangeReason,
+  parseContentRangeSize,
 } from '../utils'
 
 describe('generateId', () => {
@@ -297,5 +299,45 @@ describe('base64ToUint8Array', () => {
 
   test('empty string returns empty array', () => {
     expect(base64ToUint8Array('')).toEqual(new Uint8Array(0))
+  })
+})
+
+describe('invalidRangeReason', () => {
+  test('accepts a well-formed window', () => {
+    expect(invalidRangeReason(0, 128)).toBeNull()
+  })
+
+  test('accepts a zero-length window', () => {
+    expect(invalidRangeReason(10, 0)).toBeNull()
+  })
+
+  test('rejects a negative position', () => {
+    expect(invalidRangeReason(-1, 10)).toContain('position')
+  })
+
+  test('rejects a negative length', () => {
+    expect(invalidRangeReason(0, -10)).toContain('length')
+  })
+
+  test('rejects non-integer values', () => {
+    expect(invalidRangeReason(1.5, 10)).toContain('position')
+    expect(invalidRangeReason(0, Number.NaN)).toContain('length')
+  })
+})
+
+describe('parseContentRangeSize', () => {
+  test('reads the total from a satisfied range', () => {
+    expect(parseContentRangeSize('bytes 0-99/12345')).toBe(12345)
+  })
+
+  test('returns undefined for an unknown total', () => {
+    expect(parseContentRangeSize('bytes 0-99/*')).toBeUndefined()
+  })
+
+  test('returns undefined for missing or malformed headers', () => {
+    expect(parseContentRangeSize(null)).toBeUndefined()
+    expect(parseContentRangeSize(undefined)).toBeUndefined()
+    expect(parseContentRangeSize('bytes 0-99')).toBeUndefined()
+    expect(parseContentRangeSize('bytes 0-99/not-a-number')).toBeUndefined()
   })
 })

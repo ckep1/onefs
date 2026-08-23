@@ -141,6 +141,32 @@ export function pickFilesViaInput(options: { accept?: string; multiple?: boolean
   })
 }
 
+/**
+ * Validate a random-access read window. Returns a reason string when the
+ * request is unusable, or null when it is well formed.
+ */
+export function invalidRangeReason(position: number, length: number): string | null {
+  if (!Number.isInteger(position) || position < 0) {
+    return 'position must be a non-negative integer'
+  }
+  if (!Number.isInteger(length) || length < 0) {
+    return 'length must be a non-negative integer'
+  }
+  return null
+}
+
+/**
+ * Read the total resource size out of a `Content-Range` response header
+ * (`bytes 0-99/12345`). Returns undefined when the server sends `*` or a
+ * malformed value.
+ */
+export function parseContentRangeSize(header: string | null | undefined): number | undefined {
+  const total = header?.split('/')[1]?.trim()
+  if (!total || total === '*') return undefined
+  const size = Number(total)
+  return Number.isFinite(size) && size >= 0 ? size : undefined
+}
+
 export function isSafeEntryName(name: string): boolean {
   return (
     name.length > 0 &&

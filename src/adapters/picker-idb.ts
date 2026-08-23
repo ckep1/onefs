@@ -3,13 +3,17 @@ import type {
   OneFSFile,
   OneFSOpenOptions,
   OneFSSaveOptions,
+  OneFSDirectory,
+  OneFSEntry,
+  OneFSReadRangeOptions,
+  OneFSFileRange,
   StoredHandle,
   StoredFile,
   OneFSResult,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, toArrayBuffer, sanitizeFileName, pickFilesViaInput } from '../utils'
+import { generateId, getMimeType, toArrayBuffer, sanitizeFileName, pickFilesViaInput, invalidRangeReason } from '../utils'
 
 /**
  * Fallback adapter for browsers without File System Access API.
@@ -167,6 +171,40 @@ export class PickerIDBAdapter implements OneFSAdapter {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
+  }
+
+  /**
+   * Slice a byte window out of cached content. This platform has no directory
+   * access, so the only readable files are ones already stored in IndexedDB,
+   * matched by name. Everything else is `not_supported`.
+   */
+  async readFileRange(
+    _directory: OneFSDirectory,
+    entry: OneFSEntry,
+    options: OneFSReadRangeOptions
+  ): Promise<OneFSResult<OneFSFileRange>> {
+    if (entry.kind !== 'file') {
+      return err('not_supported', 'Cannot read a range from a directory entry')
+    }
+
+    const invalid = invalidRangeReason(options.position, options.length)
+    if (invalid) return err('io_error', `Invalid range: ${invalid}`)
+
+    try {
+      const cached = await this.storage.getStoredFiles()
+      const match = cached.find(f => f.name === entry.name && f.content.byteLength > 0)
+      if (!match) {
+        return err('not_supported', 'Range reads require cached content on web-fallback')
+      }
+
+      const start = Math.min(options.position, match.content.byteLength)
+      const end = Math.min(start + options.length, match.content.byteLength)
+
+      return ok({ content: match.content.slice(start, end), fileSize: match.content.byteLength })
+    } catch (e) {
+      const error = e as Error
+      return err('io_error', error.message || 'Failed to read range', e)
+    }
   }
 
   async getRecentFiles(): Promise<StoredHandle[]> {

@@ -9,6 +9,8 @@ import type {
   OneFSReadDirectoryOptions,
   OneFSScanOptions,
   OneFSEntry,
+  OneFSReadRangeOptions,
+  OneFSFileRange,
   StoredHandle,
   Platform,
   OneFSResult,
@@ -37,6 +39,8 @@ export type {
   OneFSReadDirectoryOptions,
   OneFSScanOptions,
   OneFSEntry,
+  OneFSReadRangeOptions,
+  OneFSFileRange,
   StoredHandle,
   Platform,
   OneFSResult,
@@ -231,6 +235,32 @@ export class OneFS {
       return err('not_supported', `Directory operations not supported on ${this.adapter.platform}`)
     }
     return this.adapter.readFileFromDirectory(directory, entry, options)
+  }
+
+  /**
+   * Read an arbitrary byte range from a file without loading the whole thing.
+   * Use for header/footer parsing (ID3, cover art) over large files.
+   *
+   * Reads that run past EOF return the truncated window rather than an error,
+   * so the returned content can be shorter than the requested length - or empty
+   * when the range starts past the end of the file.
+   *
+   * Platform behavior:
+   * - capacitor: Range request over the webview asset server
+   * - tauri: seekable file handle (open/seek/read/close)
+   * - web-fs-access: lazy Blob slice off the file handle
+   * - web-fallback: only files cached in IndexedDB, matched by name
+   *
+   * @param directory - Directory containing the file
+   * @param entry - Entry from readDirectory()/scanDirectory() with kind === 'file'
+   * @param options - Byte offset and length to read
+   * @returns The bytes read, plus the total file size when the platform reports it
+   */
+  async readFileRange(directory: OneFSDirectory, entry: OneFSEntry, options: OneFSReadRangeOptions): Promise<OneFSResult<OneFSFileRange>> {
+    if (!this.adapter.readFileRange) {
+      return err('not_supported', `Range reads not supported on ${this.adapter.platform}`)
+    }
+    return this.adapter.readFileRange(directory, entry, options)
   }
 
   /**

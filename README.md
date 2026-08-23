@@ -150,6 +150,29 @@ for (const entry of entriesResult.data) {
 }
 ```
 
+### Partial Reads
+
+`readFileRange()` reads a byte window without pulling the whole file into memory -
+useful for parsing headers or embedded artwork out of large media files:
+
+```typescript
+// Read the first 64 KB to parse tags
+const range = await fs.readFileRange(dirResult.data, entry, {
+  position: 0,
+  length: 64 * 1024,
+})
+
+if (range.ok) {
+  const header = range.data.content   // Uint8Array, <= 64 KB
+  const total = range.data.fileSize   // total bytes, when the platform reports it
+}
+```
+
+Reads that run past the end of the file return the truncated window (possibly zero
+bytes) rather than an error. Check `capabilities.readFileRange` first: every platform
+except web-fallback supports it, and web-fallback can only slice files already cached
+in IndexedDB.
+
 ### OneFSEntry
 
 Directory entries include metadata without content:
@@ -249,6 +272,7 @@ console.log(fs.capabilities)
 //   saveFileAs: true,
 //   openDirectory: true,
 //   readDirectory: true,
+//   readFileRange: true,
 //   handlePersistence: true,
 //   canSaveInPlace: true,
 // }
@@ -266,6 +290,7 @@ console.log(fs.supportsHandlePersistence) // boolean
 | saveFileAs | Yes | Yes (download) | Yes | Yes (app dir) |
 | openDirectory | Yes | No | Yes | Limited |
 | readDirectory | Yes | No | Yes | Limited |
+| readFileRange | Yes | No (cached only) | Yes | Yes |
 | handlePersistence | Yes | No | No | No |
 | canSaveInPlace | Yes | No | Yes | No |
 

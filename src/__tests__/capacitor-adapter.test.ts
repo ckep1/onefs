@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto'
-import { describe, test, expect, vi } from 'vitest'
+import { describe, test, expect, vi, afterEach } from 'vitest'
 import { CapacitorAdapter } from '../adapters/capacitor'
 import type { OneFSDirectory, OneFSEntry, OneFSFile } from '../types'
 
@@ -17,6 +17,10 @@ function makeFile(overrides: Partial<OneFSFile> = {}): OneFSFile {
 }
 
 describe('CapacitorAdapter security and root-path behavior', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   test('scanDirectory preserves real filenames containing repeated dots', async () => {
     const adapter = new CapacitorAdapter('cap-scan-dots-' + Math.random().toString(36).slice(2))
     const readdir = vi.fn().mockResolvedValue({
@@ -209,6 +213,91 @@ describe('CapacitorAdapter security and root-path behavior', () => {
       expect(result.error.code).toBe('io_error')
     }
     expect(rename).not.toHaveBeenCalled()
+  })
+
+  test('readFileFromDirectory streams full reads over the asset server', async () => {
+    const adapter = new CapacitorAdapter('cap-full-fetch-' + Math.random().toString(36).slice(2))
+    const readFile = vi.fn()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer,
+    })
+
+    ;(adapter as any).loadFilesystem = vi.fn().mockResolvedValue({
+      Filesystem: { readFile, getUri: vi.fn().mockResolvedValue({ uri: 'file:///docs/song.mp3' }) },
+      Directory: { Documents: 'DOCUMENTS' },
+    })
+    ;(adapter as any).loadCore = vi.fn().mockResolvedValue({
+      Capacitor: { convertFileSrc: (uri: string) => `capacitor-asset://${uri}` },
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const directory: OneFSDirectory = { id: 'dir-id', name: 'Documents', path: '' }
+    const entry: OneFSEntry = { name: 'song.mp3', kind: 'file', path: 'song.mp3' }
+
+    const result = await adapter.readFileFromDirectory(directory, entry)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(Array.from(result.data.content)).toEqual([1, 2, 3])
+    }
+    expect(fetchMock).toHaveBeenCalledWith('capacitor-asset://file:///docs/song.mp3')
+    expect(readFile).not.toHaveBeenCalled()
+  })
+
+  test('readFileFromDirectory falls back to the base64 bridge when fetch fails', async () => {
+    const adapter = new CapacitorAdapter('cap-full-fallback-' + Math.random().toString(36).slice(2))
+    const readFile = vi.fn().mockResolvedValue({ data: btoa('abc') })
+    const fetchMock = vi.fn().mockRejectedValue(new Error('no asset server'))
+
+    ;(adapter as any).loadFilesystem = vi.fn().mockResolvedValue({
+      Filesystem: { readFile, getUri: vi.fn().mockResolvedValue({ uri: 'file:///docs/song.mp3' }) },
+      Directory: { Documents: 'DOCUMENTS' },
+    })
+    ;(adapter as any).loadCore = vi.fn().mockResolvedValue({
+      Capacitor: { convertFileSrc: (uri: string) => `capacitor-asset://${uri}` },
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const directory: OneFSDirectory = { id: 'dir-id', name: 'Documents', path: '' }
+    const entry: OneFSEntry = { name: 'song.mp3', kind: 'file', path: 'song.mp3' }
+
+    const result = await adapter.readFileFromDirectory(directory, entry)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(new TextDecoder().decode(result.data.content)).toBe('abc')
+    }
+    expect(readFile).toHaveBeenCalledWith({ path: 'song.mp3', directory: 'DOCUMENTS' })
+  })
+
+  test('readFileFromDirectory rejects traversal paths before any read', async () => {
+    const adapter = new CapacitorAdapter('cap-full-traversal-' + Math.random().toString(36).slice(2))
+    const readFile = vi.fn()
+    const fetchMock = vi.fn()
+
+    ;(adapter as any).loadFilesystem = vi.fn().mockResolvedValue({
+      Filesystem: { readFile, getUri: vi.fn() },
+      Directory: { Documents: 'DOCUMENTS' },
+    })
+    ;(adapter as any).loadCore = vi.fn().mockResolvedValue({
+      Capacitor: { convertFileSrc: vi.fn() },
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const directory: OneFSDirectory = { id: 'dir-id', name: 'Documents', path: '' }
+    const entry: OneFSEntry = { name: 'passwd', kind: 'file', path: '../../etc/passwd' }
+
+    const result = await adapter.readFileFromDirectory(directory, entry)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.error.code).toBe('permission_denied')
+    }
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(readFile).not.toHaveBeenCalled()
   })
 
   test('deleteFile succeeds for files tracked in active session', async () => {

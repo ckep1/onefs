@@ -8,12 +8,14 @@ import type {
   OneFSReadDirectoryOptions,
   OneFSScanOptions,
   OneFSEntry,
+  OneFSReadRangeOptions,
+  OneFSFileRange,
   StoredHandle,
   OneFSResult,
 } from '../types'
 import { ok, err } from '../types'
 import { IDBStorage } from '../storage/idb'
-import { generateId, getMimeType, getFileName, isPathWithin, normalizePath, toArrayBuffer, isSafeEntryName } from '../utils'
+import { generateId, getMimeType, getFileName, isPathWithin, normalizePath, toArrayBuffer, isSafeEntryName, invalidRangeReason } from '../utils'
 
 type TauriDialog = typeof import('@tauri-apps/plugin-dialog')
 type TauriFS = typeof import('@tauri-apps/plugin-fs')
@@ -436,6 +438,65 @@ export class TauriAdapter implements OneFSAdapter {
         return err('permission_denied', 'Permission denied to read file', e)
       }
       return err('io_error', error.message || 'Failed to read file', e)
+    }
+  }
+
+  /**
+   * Read a byte window using a seekable file handle, so only the requested
+   * bytes are pulled across the IPC bridge.
+   */
+  async readFileRange(
+    directory: OneFSDirectory,
+    entry: OneFSEntry,
+    options: OneFSReadRangeOptions
+  ): Promise<OneFSResult<OneFSFileRange>> {
+    if (!entry.path || entry.kind !== 'file') {
+      return err('not_supported', 'Cannot read file without path')
+    }
+
+    if (directory.path && !isPathWithin(entry.path, directory.path)) {
+      return err('permission_denied', 'Path is outside the expected directory')
+    }
+
+    const invalid = invalidRangeReason(options.position, options.length)
+    if (invalid) return err('io_error', `Invalid range: ${invalid}`)
+
+    if (options.length === 0) {
+      return ok({ content: new Uint8Array(0) })
+    }
+
+    let handle: Awaited<ReturnType<TauriFS['open']>> | null = null
+    try {
+      const { fs } = await this.loadModules()
+      handle = await fs.open(entry.path, { read: true })
+      await handle.seek(options.position, fs.SeekMode.Start)
+
+      const buffer = new Uint8Array(options.length)
+      let filled = 0
+      while (filled < options.length) {
+        const read = await handle.read(buffer.subarray(filled))
+        if (!read) break
+        filled += read
+      }
+
+      // fstat on an open handle is cheap; treat a failure as "size unknown"
+      const fileSize = await handle.stat().then(info => info.size).catch(() => undefined)
+
+      return ok({
+        content: filled === options.length ? buffer : buffer.slice(0, filled),
+        fileSize,
+      })
+    } catch (e) {
+      const error = e as Error
+      if (error.message?.includes('No such file') || error.message?.includes('not found')) {
+        return err('not_found', 'File not found', e)
+      }
+      if (error.message?.includes('Permission denied')) {
+        return err('permission_denied', 'Permission denied to read file', e)
+      }
+      return err('io_error', error.message || 'Failed to read range', e)
+    } finally {
+      await handle?.close().catch(() => {})
     }
   }
 

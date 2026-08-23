@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-08-23
+
+### Added
+
+- `readFileRange(directory, entry, { position, length })` for random-access partial reads that never load the whole file when the platform can avoid it. Returns `{ content, fileSize? }`; reads past EOF return the truncated window (possibly zero bytes) rather than an error
+  - Capacitor: `Range` request over the webview asset server, with `Content-Range` parsed for the total size; a server that ignores `Range` falls back to slicing the returned body
+  - Tauri: seekable file handle (`open`/`seek`/`read`/`close`), with `fileSize` from `fstat` on the open handle
+  - web-fs-access: lazy `Blob` slice off the file handle
+  - web-fallback: slices content already cached in IndexedDB, otherwise `not_supported`
+- `readFileRange` capability flag on `OneFSCapabilities` (true everywhere except web-fallback)
+- `OneFSReadRangeOptions` and `OneFSFileRange` exported types
+- `invalidRangeReason()` and `parseContentRangeSize()` helpers in `src/utils.ts`, with unit tests
+- Per-adapter regression tests for range reads (happy path, Range-ignored fallback, EOF truncation, path-traversal rejection) and for the new Capacitor full-read path
+
+### Changed
+
+- Capacitor full reads in `readFileFromDirectory` now stream through `fetch(Capacitor.convertFileSrc(uri))` instead of the base64 `Filesystem.readFile` bridge, which cost roughly 4x the file size in transient memory per file. The base64 path remains as a fallback when the asset server is unavailable (non-webview environments), and the existing provenance and path-safety checks are unchanged
+
 ## [0.6.5] - 2026-06-09
 
 ### Fixed

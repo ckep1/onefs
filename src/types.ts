@@ -122,6 +122,23 @@ export interface OneFSScanOptions extends OneFSReadDirectoryOptions {
   signal?: AbortSignal
 }
 
+export interface OneFSReadRangeOptions {
+  /** Byte offset to start reading from */
+  position: number
+  /** Number of bytes to read */
+  length: number
+}
+
+/**
+ * A window of bytes read from a file without loading the whole thing.
+ */
+export interface OneFSFileRange {
+  /** The bytes read - shorter than the requested length when the range ends past EOF */
+  content: Uint8Array
+  /** Total file size in bytes, when the platform reports it without a full read */
+  fileSize?: number
+}
+
 export type PermissionMode = 'read' | 'readwrite'
 export type PermissionStatus = 'granted' | 'denied' | 'prompt'
 
@@ -182,6 +199,11 @@ export interface OneFSCapabilities {
   openDirectory: boolean | 'limited'
   /** Can list directory contents */
   readDirectory: boolean | 'limited'
+  /**
+   * Can read an arbitrary byte range without loading the whole file.
+   * False on web-fallback, which can only slice content already cached in IndexedDB.
+   */
+  readFileRange: boolean
   /** Can persist and restore file handles across sessions (web-fs-access only) */
   handlePersistence: boolean
   /**
@@ -205,6 +227,7 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     saveFileAs: true,
     openDirectory: true,
     readDirectory: true,
+    readFileRange: true,
     handlePersistence: true,
     canSaveInPlace: true,
     permissions: true,
@@ -217,6 +240,7 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     saveFileAs: true,
     openDirectory: false,
     readDirectory: false,
+    readFileRange: false,
     handlePersistence: false,
     canSaveInPlace: false,
     permissions: false,
@@ -229,6 +253,7 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     saveFileAs: true,
     openDirectory: true,
     readDirectory: true,
+    readFileRange: true,
     handlePersistence: false,
     canSaveInPlace: true,
     permissions: false,
@@ -241,6 +266,7 @@ export const PLATFORM_CAPABILITIES: Record<Platform, OneFSCapabilities> = {
     saveFileAs: true,
     openDirectory: 'limited',
     readDirectory: 'limited',
+    readFileRange: true,
     handlePersistence: false,
     canSaveInPlace: false,
     permissions: false,
@@ -275,6 +301,9 @@ export interface OneFSAdapter {
 
   /** Load a specific file from a directory. Supports partial reads via maxBytes option. */
   readFileFromDirectory?(directory: OneFSDirectory, entry: OneFSEntry, options?: { maxBytes?: number }): Promise<OneFSResult<OneFSFile>>
+
+  /** Read an arbitrary byte range from a file (optional - check capabilities.readFileRange) */
+  readFileRange?(directory: OneFSDirectory, entry: OneFSEntry, options: OneFSReadRangeOptions): Promise<OneFSResult<OneFSFileRange>>
 
   /** Recursively scan directory for files (Tauri/Capacitor only) */
   scanDirectory?(directory: OneFSDirectory, options?: OneFSScanOptions): Promise<OneFSResult<OneFSEntry[]>>
