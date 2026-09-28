@@ -1,5 +1,8 @@
 node_modules/
 dist/
+
+# bun.lock is the truth (CI installs with bun)
+package-lock.json
 *.log
 .DS_Store
 todo.md
